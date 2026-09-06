@@ -1,73 +1,79 @@
 # AgentX Server
 
-AgentX Registry/API 服务，提供 Workspace、成员权限、Manifest、不可变 Artifact、设备 heartbeat、Drift、Reconcile plan、审批、审计和 outbox worker。
+AgentX Server 是 Registry/API 服务，为 AI Agent 环境提供团队级的版本、权限和设备管理。它保存 Workspace Manifest、不可变 Artifact、设备 heartbeat、Drift、Reconcile plan、审批、审计事件和 outbox 任务。
+
+## 能力
+
+- Workspace、成员角色和策略管理
+- Manifest 与不可变包版本的发布、下载和 SHA-256 校验
+- 可选 Ed25519 Artifact 签名校验与审批流
+- 设备注册、heartbeat、Drift 查询和自动修复计划
+- 文件存储或 S3/MinIO Artifact 存储
+- API Token、HMAC JWT 和 OIDC discovery/JWKS 认证
+- OpenAPI 契约、分页查询和审计事件
 
 ## 本地运行
 
+要求 Go 1.24+。单节点默认使用文件存储：
+
 ```bash
+cp .env.example .env
+go run ./cmd/migrate
 AGENTX_DATA_DIR=./data go run ./cmd/app
 ```
 
-## Hosted staging
+服务默认监听 `http://localhost:8080`：
 
 ```bash
-docker compose -f docker-compose.staging.yml up -d --build
-AGENTX_TOKEN=... AGENTX_WORKSPACE_ID=... ./scripts/staging-acceptance.sh
+curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
 ```
 
-API 契约见 [`openapi.yaml`](openapi.yaml)，产品和使用文档见 [`PRODUCT.md`](PRODUCT.md)。
-
-声明式管理 Codex、Claude Code 等 AI Agent 的 Skills 和工作环境。
-
-## 当前状态
-
-Rust CLI 已实现本地 Skill 生命周期、Codex/Claude 的 Rules 和 MCP 配置适配，以及 Registry `login`、`publish`、`pull`；通过 `--workspace` 使用 workspace scoped Registry，`team pull`/`team push` 可同步 workspace 团队 manifest。Go API 提供 workspace/membership、策略执行、版本化 manifest、Registry、审计、Drift、设备 heartbeat、cursor 分页和 scoped artifact 下载；Vue 3 控制台支持 workspace、成员角色、manifest、策略、Registry、设备、Drift 和 Audit 操作。
+也可以直接使用 Makefile：
 
 ```bash
-cd cli
-cargo run -- init
-cargo run -- doctor
-cargo run -- install --yes
-cargo run -- diff
+make test
+make build
+make migrate
 ```
 
-CLI 远程凭据保存在用户配置目录，拉取时会重新校验 SHA-256。服务端可使用 PostgreSQL、API token、HMAC JWT 或配置 `AGENTX_OIDC_ISSUER` 启用 OIDC discovery/JWKS 验证，并支持 Ed25519 artifact 签名验证。
+## 配置
 
-## 服务端
+| 变量 | 用途 |
+| --- | --- |
+| `AGENTX_DATA_DIR` | 文件仓库和 outbox 的本地目录 |
+| `AGENTX_DATABASE_URL` | PostgreSQL 连接；设置后使用数据库仓库 |
+| `AGENTX_API_TOKEN` | 单节点 Bearer Token |
+| `AGENTX_JWT_SECRET` | HMAC JWT 验证密钥 |
+| `AGENTX_OIDC_ISSUER` | OIDC issuer，用于 discovery/JWKS 验证 |
+| `AGENTX_ARTIFACT_STORE` | `file` 或 `s3` |
+| `AGENTX_S3_ENDPOINT` / `AGENTX_S3_BUCKET` | S3/MinIO 存储配置 |
+
+生产部署不应把凭据写入 Manifest 或 Artifact。详细示例见 [`.env.example`](.env.example)。
+
+## API
+
+完整契约见 [`openapi.yaml`](openapi.yaml)。常用接口包括：
+
+- `/healthz`、`/readyz`：存活与就绪检查
+- `/v1/workspaces`：Workspace 和成员管理
+- `/v1/workspaces/{id}/manifest`：团队 Manifest 版本
+- `/v1/packages`：包版本列表、发布和下载
+- `/v1/workspaces/{id}/devices`：设备、heartbeat 和 reconcile plan
+- `/v1/drift`、`/v1/audit-events`：漂移和审计查询
+
+CLI 通过 Registry API 使用服务端：
 
 ```bash
-cd server
-AGENTX_DATA_DIR=../data go run ./cmd/app
-```
-
-API 文档见 [`server/openapi.yaml`](server/openapi.yaml)，本地单节点部署见 [`docker-compose.yml`](docker-compose.yml)。开源贡献规则见 [`CONTRIBUTING.md`](CONTRIBUTING.md)，安全问题见 [`SECURITY.md`](SECURITY.md)。
-
-可选依赖使用本机已有镜像启动：`docker compose --profile cache up -d`，或 `docker compose --profile object-store up -d`。默认 API 不依赖 Redis/MinIO。
-
-Hosted artifact storage 可通过 `AGENTX_ARTIFACT_STORE=s3` 启用 S3/MinIO 适配器，并设置 `AGENTX_S3_ENDPOINT`、`AGENTX_S3_ACCESS_KEY`、`AGENTX_S3_SECRET_KEY`、`AGENTX_S3_BUCKET` 和可选的 `AGENTX_S3_SECURE=true`。发布、workspace、策略、manifest、设备和成员变更会写入 outbox，由内置 worker 重试处理。
-
-策略文档可使用 `{"require_signature":true}` 强制签名，或使用 `{"require_approval":true}` 将新版本置为 `pending_approval`；审批前 workspace 下载会被拒绝。
-
-Hosted Registry 使用前先执行 `server/migrations/001_initial.sql`。常用远程命令：
-
-```bash
-agentx registry login https://registry.example --token "$AGENTX_TOKEN"
-agentx registry login https://registry.example --token "$AGENTX_TOKEN" --workspace "$AGENTX_WORKSPACE_ID"
-agentx registry publish my-skill 1.2.3 ./my-skill.tar --signature "$SIGNATURE"
-agentx registry pull my-skill 1.2.3 --output ./my-skill.tar
+agentx registry login http://localhost:8080 --token "$AGENTX_TOKEN"
+agentx registry publish review-skill 1.2.3 ./review-skill.tar
+agentx registry pull review-skill 1.2.3 --output ./review-skill.tar
 agentx team pull --output agentx.yaml
-agentx team push --input agentx.yaml
 ```
 
-设备闭环命令会从 workspace manifest 生成计划，下载并校验 artifact，写入本地设备缓存，再用 heartbeat 上报实际状态；每次同步会保存上一状态，可执行回滚：
+## Staging
 
-```bash
-agentx agent plan --device laptop-2
-agentx agent sync --device laptop-2
-agentx agent rollback --device laptop-2
-```
-
-生产前可用 staging compose 启动 PostgreSQL、MinIO、Dex OIDC、API 和控制台，并运行验收脚本。脚本要求一个通过 OIDC 登录得到的 bearer token 和 workspace ID：
+Staging Compose 会启动 PostgreSQL、MinIO、Dex OIDC、API 和控制台：
 
 ```bash
 docker compose -f docker-compose.staging.yml up -d --build
@@ -76,4 +82,4 @@ AGENTX_DATABASE_URL='postgres://agentx:agentx-staging@localhost:5433/agentx' ./s
 ./scripts/staging-key-rotation.sh
 ```
 
-服务提供 `/readyz`、`/metrics`，outbox 事件超过最大重试次数会进入 dead-letter 并记录最后错误；`AGENTX_RATE_LIMIT_PER_MINUTE` 可调整 API 限流。
+CI 会执行 `go test ./...`、`go vet ./...` 和两个服务二进制的构建。产品说明见 [`PRODUCT.md`](PRODUCT.md)，安全问题见 [`SECURITY.md`](SECURITY.md)。
