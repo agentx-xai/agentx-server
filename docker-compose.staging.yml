@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agentx
+      POSTGRES_USER: agentx
+      POSTGRES_PASSWORD: agentx-staging
+    ports: ["5433:5432"]
+    volumes: ["staging-pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentx -d agentx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: agentx
+      MINIO_ROOT_PASSWORD: agentx-staging-secret
+    ports: ["19000:9000", "19001:9001"]
+    volumes: ["staging-minio:/data"]
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports: ["5556:5556"]
+    volumes: ["./staging/dex-config.yaml:/etc/dex/config.yaml:ro"]
+  api:
+    build: ./server
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_started}
+      migrate: {condition: service_completed_successfully}
+    ports: ["8081:8080"]
+    environment:
+      AGENTX_HTTP_ADDR: :8080
+      AGENTX_DATABASE_URL: postgres://agentx:agentx-staging@postgres:5432/agentx?sslmode=disable
+      AGENTX_ARTIFACT_STORE: s3
+      AGENTX_S3_ENDPOINT: minio:9000
+      AGENTX_S3_ACCESS_KEY: agentx
+      AGENTX_S3_SECRET_KEY: agentx-staging-secret
+      AGENTX_S3_BUCKET: agentx-artifacts
+      AGENTX_S3_SECURE: "false"
+      AGENTX_OIDC_ISSUER: http://dex:5556/dex
+      AGENTX_JWT_AUDIENCE: agentx
+      AGENTX_API_TOKEN: agentx-staging-bootstrap-token
+      AGENTX_RATE_LIMIT_PER_MINUTE: "1200"
+  migrate:
+    build: ./server
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: ["/app/agentx-migrate"]
+    environment:
+      AGENTX_DATABASE_URL: postgres://agentx:agentx-staging@postgres:5432/agentx?sslmode=disable
+  web:
+    image: node:22-alpine
+    working_dir: /app
+    volumes: ["./web:/app", "staging-web-node-modules:/app/node_modules"]
+    environment: ["VITE_API_URL=http://localhost:8081"]
+    command: ["sh", "-c", "npm ci && npm run dev -- --host 0.0.0.0"]
+    ports: ["5178:5173"]
+volumes:
+  staging-pg:
+  staging-minio:
+  staging-web-node-modules:

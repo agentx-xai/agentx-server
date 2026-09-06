@@ -1,0 +1,27 @@
+services:
+  api:
+    build: ./server
+    ports: ["8080:8080"]
+    environment:
+      AGENTX_DATA_DIR: /var/lib/agentx
+    volumes:
+      - agentx-data:/var/lib/agentx
+    restart: unless-stopped
+  redis:
+    image: redis:latest
+    profiles: ["cache"]
+    ports: ["6379:6379"]
+    restart: unless-stopped
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    profiles: ["object-store"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: agentx
+      MINIO_ROOT_PASSWORD: change-me-now
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+    restart: unless-stopped
+volumes:
+  agentx-data:
+  minio-data:

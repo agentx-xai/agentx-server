@@ -1,0 +1,9 @@
+/data/
+/tmp/
+/app
+/migrate
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store

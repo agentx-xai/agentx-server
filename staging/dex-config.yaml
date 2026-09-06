@@ -1,0 +1,20 @@
+issuer: http://dex:5556/dex
+storage:
+  type: sqlite3
+  config:
+    file: /tmp/dex.db
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  skipApprovalScreen: true
+staticClients:
+- id: agentx
+  name: AgentX staging
+  secret: agentx-staging-client-secret
+  redirectURIs: ["http://localhost:5178/"]
+enablePasswordDB: true
+staticPasswords:
+- email: admin@example.com
+  hash: "$2a$10$7EqJtq98hPqEX7fNZaFWoOe6QhL6f0f7x6Q9x3Q2iX6f9r3n1mW9K"
+  username: admin
+  userID: 00000000-0000-0000-0000-000000000001

@@ -1,0 +1,73 @@
+openapi: 3.0.3
+info: { title: AgentX Registry API, version: 0.1.0 }
+paths:
+  /healthz: { get: { responses: { '200': { description: healthy } } } }
+  /readyz: { get: { responses: { '200': { description: ready } } } }
+  /v1/me: { get: { responses: { '200': { description: authenticated principal } } } }
+  /v1/devices:
+    get: { parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: devices or paginated collection } } }
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { '$ref': '#/components/schemas/Device' } } } }
+      responses: { '201': { description: registered } }
+  /v1/devices/{id}/heartbeat:
+    post:
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: updated } }
+  /v1/audit-events:
+    get: { parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: audit events or paginated collection } } }
+  /v1/packages/{name}/releases:
+    post:
+      parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [artifact, version], properties: { version: { type: string }, artifact: { type: string, format: binary } } } } } }
+      responses: { '201': { description: published } }
+  /v1/packages:
+    get:
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
+      responses: { '200': { description: package releases or paginated collection } }
+  /v1/workspaces:
+    get: { parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: authorized workspaces or paginated collection } } }
+    post: { requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, slug] } } } }, responses: { '201': { description: created } } }
+  /v1/workspaces/{id}/members:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: members or paginated collection } } }
+    post: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '201': { description: member added } } }
+  /v1/workspaces/{id}/members/{user_id}:
+    patch: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: user_id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: role updated } } }
+    delete: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: user_id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: member removed } } }
+  /v1/workspaces/{id}:
+    delete: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: workspace deleted } } }
+  /v1/workspaces/{id}/packages:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: workspace package releases or paginated collection } } }
+  /v1/workspaces/{id}/packages/{name}/releases:
+    post: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: name, in: path, required: true, schema: { type: string } }], responses: { '201': { description: published } } }
+  /v1/workspaces/{id}/artifacts/{digest}:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: digest, in: path, required: true, schema: { type: string } }], responses: { '200': { description: artifact bytes }, '403': { description: forbidden }, '404': { description: not found } } }
+  /v1/workspaces/{id}/packages/{name}/{version}/download:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: name, in: path, required: true, schema: { type: string } }, { name: version, in: path, required: true, schema: { type: string } }], responses: { '200': { description: artifact bytes }, '403': { description: forbidden }, '404': { description: not found } } }
+  /v1/workspaces/{id}/packages/{name}/{version}/approve:
+    post: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: name, in: path, required: true, schema: { type: string } }, { name: version, in: path, required: true, schema: { type: string } }], responses: { '200': { description: release approved }, '403': { description: forbidden } } }
+  /v1/drift:
+    get: { responses: { '200': { description: package drift items } } }
+  /v1/workspaces/{id}/devices:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: workspace devices or paginated collection } } }
+    post: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '201': { description: registered } } }
+  /v1/workspaces/{id}/devices/{device_id}/heartbeat:
+    post: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: device_id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: heartbeat accepted } } }
+  /v1/workspaces/{id}/drift:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: workspace drift } } }
+  /v1/workspaces/{id}/audit-events:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }], responses: { '200': { description: workspace audit events or paginated collection } } }
+  /v1/workspaces/{id}/policies:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: current policy } } }
+    put: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: policy revision saved } } }
+  /v1/workspaces/{id}/manifest:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: current team manifest } } }
+    put: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: manifest revision saved } } }
+  /v1/workspaces/{id}/devices/{device_id}/plan:
+    get: { parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: device_id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: reconcile plan } } }
+components:
+  parameters:
+    Limit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+    Cursor: { name: cursor, in: query, required: false, schema: { type: string } }
+  schemas:
+    Device: { type: object, required: [name], properties: { id: { type: string }, name: { type: string }, agent: { type: string }, status: { type: string } } }
+    TeamManifest: { type: object, properties: { revision: { type: integer }, document: { type: object, additionalProperties: true } } }
