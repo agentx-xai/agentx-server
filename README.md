@@ -1,5 +1,15 @@
 # AgentX Server
 
+<p align="center"><img src="https://raw.githubusercontent.com/agentx-xai/.github/main/profile/agentx-mark.svg" alt="AgentX" width="88"></p>
+
+<p align="center">
+  <a href="https://github.com/agentx-xai/agentx-server/actions/workflows/ci.yml"><img src="https://github.com/agentx-xai/agentx-server/actions/workflows/ci.yml/badge.svg" alt="Server CI"></a>
+  <a href="https://github.com/agentx-xai/agentx-server/releases"><img src="https://img.shields.io/github/v/release/agentx-xai/agentx-server" alt="Latest release"></a>
+  <a href="https://github.com/agentx-xai/agentx-server/blob/main/LICENSE"><img src="https://img.shields.io/github/license/agentx-xai/agentx-server" alt="MIT license"></a>
+</p>
+
+<p align="center">面向团队 Workspace 的 AgentX Registry、策略和设备管理服务。</p>
+
 AgentX Server 是 Registry/API 服务，为 AI Agent 环境提供团队级的版本、权限和设备管理。它保存 Workspace Manifest、不可变 Artifact、设备 heartbeat、Drift、Reconcile plan、审批、审计事件和 outbox 任务。
 
 ## 能力
@@ -36,6 +46,8 @@ make test
 make build
 make migrate
 ```
+
+生产前建议先阅读 [`PRODUCT.md`](PRODUCT.md) 和 [`SECURITY.md`](SECURITY.md)，并使用 staging Compose 验证 PostgreSQL、MinIO、Dex OIDC、API 和控制台的组合部署。
 
 ## 配置
 
