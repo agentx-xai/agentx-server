@@ -83,3 +83,5 @@ AGENTX_DATABASE_URL='postgres://agentx:agentx-staging@localhost:5433/agentx' ./s
 ```
 
 CI 会执行 `go test ./...`、`go vet ./...` 和两个服务二进制的构建。产品说明见 [`PRODUCT.md`](PRODUCT.md)，安全问题见 [`SECURITY.md`](SECURITY.md)。
+
+推送形如 `v0.1.2` 的 Tag 会触发 `.github/workflows/release.yml`，先运行测试、`go vet` 和二进制构建，再创建 GitHub Release 并上传 Server、Migrate、OpenAPI 和 migrations 压缩包。
