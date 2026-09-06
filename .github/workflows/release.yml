@@ -1,0 +1,56 @@
+name: Release Server
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentx
+          POSTGRES_PASSWORD: agentx
+          POSTGRES_DB: agentx_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agentx -d agentx_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Test
+        run: go test ./...
+        env:
+          AGENTX_POSTGRES_TEST_URL: postgres://agentx:agentx@localhost:5432/agentx_test?sslmode=disable
+      - run: go vet ./...
+      - name: Build release binaries
+        run: |
+          mkdir -p dist
+          go build -o dist/agentx-server ./cmd/app
+          go build -o dist/agentx-migrate ./cmd/migrate
+          cp openapi.yaml dist/
+          cp -R migrations dist/
+          tar -czf "agentx-server-$RELEASE_TAG-linux-amd64.tar.gz" -C dist .
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "AgentX Server $RELEASE_TAG" --generate-notes "agentx-server-$RELEASE_TAG-linux-amd64.tar.gz"
