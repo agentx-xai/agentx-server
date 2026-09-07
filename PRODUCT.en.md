@@ -32,7 +32,7 @@ The current policy supports `require_signature` and `require_approval`. Signatur
 
 ## Devices and reconciliation
 
-Devices are registered inside a Workspace and report an Agent, status, and installed package digest map through heartbeat. Drift compares that map with the current Workspace Manifest. A reconcile plan returns `install`, `update`, or `remove` actions and the manifest revision used to generate them. The CLI downloads only the required artifact, verifies its digest, stores a previous local state, and then sends heartbeat.
+Devices are registered inside a Workspace and report an Agent, status, and installed package digest map through heartbeat. Drift compares that map with the current Workspace Manifest and reports `missing`, `changed`, and `unexpected` packages; an intentionally empty Manifest therefore identifies every installed package as unexpected. A reconcile plan returns `install`, `update`, or `remove` actions and the manifest revision used to generate them. The CLI downloads only the required artifact, verifies its digest, stores a previous local state, and then sends heartbeat.
 
 ## Persistence
 

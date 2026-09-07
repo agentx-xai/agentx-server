@@ -86,5 +86,5 @@ func registerWorkspaceRoutes(r *gin.Engine, s *workspace.Service) {
 	_ = entity.RoleViewer
 }
 func errorEnvelope(c *gin.Context, code, message string) gin.H {
-	return gin.H{"error": gin.H{"code": code, "message": message, "request_id": c.GetHeader("X-Request-ID")}}
+	return gin.H{"error": gin.H{"code": code, "message": message, "request_id": c.Writer.Header().Get("X-Request-ID")}}
 }

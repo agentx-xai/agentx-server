@@ -188,6 +188,10 @@ func TestBearerTokenProtectsBusinessRoutes(t *testing.T) {
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", unauthorized.Code)
 	}
+	requestID := unauthorized.Header().Get("X-Request-ID")
+	if requestID == "" || !bytes.Contains(unauthorized.Body.Bytes(), []byte(`"request_id":"`+requestID+`"`)) {
+		t.Fatalf("generated request ID missing from error response: %s", unauthorized.Body.String())
+	}
 	req := httptest.NewRequest(http.MethodGet, "/v1/devices", nil)
 	req.Header.Set("Authorization", "Bearer integration-token")
 	authorized := httptest.NewRecorder()

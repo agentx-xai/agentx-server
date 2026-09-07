@@ -36,7 +36,7 @@ func registerRegistryRoutes(r *gin.Engine, s *registry.Service, ws *workspace.Se
 		r.GET("/v1/artifacts/:digest", func(c *gin.Context) {
 			f, e := s.Open(c, c.Param("digest"))
 			if e != nil {
-				c.Status(404)
+				c.JSON(http.StatusNotFound, errorEnvelope(c, "ARTIFACT_NOT_FOUND", "artifact not found"))
 				return
 			}
 			defer f.Close()
@@ -64,7 +64,7 @@ func registerRegistryRoutes(r *gin.Engine, s *registry.Service, ws *workspace.Se
 			}
 			f, err := s.OpenForWorkspace(c, c.Param("id"), c.Param("digest"))
 			if err != nil {
-				c.Status(http.StatusNotFound)
+				c.JSON(http.StatusNotFound, errorEnvelope(c, "ARTIFACT_NOT_FOUND", "artifact not found"))
 				return
 			}
 			defer f.Close()
@@ -78,7 +78,7 @@ func registerRegistryRoutes(r *gin.Engine, s *registry.Service, ws *workspace.Se
 			}
 			f, err := s.OpenReleaseForWorkspace(c, c.Param("id"), c.Param("name"), c.Param("version"))
 			if err != nil {
-				c.Status(http.StatusNotFound)
+				c.JSON(http.StatusNotFound, errorEnvelope(c, "RELEASE_NOT_FOUND", "release is unavailable"))
 				return
 			}
 			defer f.Close()

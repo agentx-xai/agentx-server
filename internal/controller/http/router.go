@@ -103,7 +103,7 @@ func tokenAuth(token, jwtSecret, issuer, audience string, oidcVerifier *auth.OID
 		}
 		h := c.GetHeader("Authorization")
 		if len(h) < 8 || h[:7] != "Bearer " {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "UNAUTHORIZED", "message": "valid bearer token required"}})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errorEnvelope(c, "UNAUTHORIZED", "valid bearer token required"))
 			return
 		}
 		var p auth.Principal
@@ -115,7 +115,7 @@ func tokenAuth(token, jwtSecret, issuer, audience string, oidcVerifier *auth.OID
 			p, err = auth.VerifyBearer(h[7:], token, jwtSecret, issuer, audience)
 		}
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "UNAUTHORIZED", "message": err.Error()}})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, errorEnvelope(c, "UNAUTHORIZED", err.Error()))
 			return
 		}
 		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), p))

@@ -268,8 +268,20 @@ func (r PackageRepository) StoreIdempotencyFingerprint(ctx context.Context, work
 	if err != nil {
 		return err
 	}
-	_, err = r.Pool.Exec(ctx, `INSERT INTO idempotency_keys(workspace_id,key,response_json,request_fingerprint) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,key) DO UPDATE SET request_fingerprint=COALESCE(idempotency_keys.request_fingerprint,EXCLUDED.request_fingerprint)`, workspaceID, key, raw, fingerprint)
-	return err
+	result, err := r.Pool.Exec(ctx, `INSERT INTO idempotency_keys(workspace_id,key,response_json,request_fingerprint) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,key) DO NOTHING`, workspaceID, key, raw, fingerprint)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		var existingFingerprint string
+		if err := r.Pool.QueryRow(ctx, `SELECT COALESCE(request_fingerprint,'') FROM idempotency_keys WHERE workspace_id=$1 AND key=$2`, workspaceID, key).Scan(&existingFingerprint); err != nil {
+			return err
+		}
+		if existingFingerprint != "" && fingerprint != "" && existingFingerprint != fingerprint {
+			return fmt.Errorf("idempotency key was already used for a different request")
+		}
+	}
+	return nil
 }
 
 func (r PackageRepository) List(ctx context.Context) ([]entity.Release, error) {

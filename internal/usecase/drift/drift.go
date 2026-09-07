@@ -37,11 +37,18 @@ func (s *Service) calculateForWorkspace(ctx context.Context, workspaceID string,
 		if err != nil {
 			return nil, err
 		}
-		if expected := expectedFromManifest(manifest.Document); len(expected) > 0 {
+		expected := expectedFromManifest(manifest.Document)
+		if manifest.Revision > 0 || hasDesiredPackages(manifest.Document) {
 			return calculate(devices, expected), nil
 		}
 	}
 	return calculate(devices, releases), nil
+}
+
+func hasDesiredPackages(document map[string]any) bool {
+	_, packages := document["packages"]
+	_, skills := document["skills"]
+	return packages || skills
 }
 
 func expectedFromManifest(document map[string]any) []entity.Release {
@@ -103,6 +110,11 @@ func calculate(devices []entity.Device, releases []entity.Release) []entity.Drif
 				out = append(out, entity.DriftItem{DeviceID: d.ID, DeviceName: d.Name, Package: name, ExpectedSHA256: want.SHA256, Kind: "missing"})
 			} else if got != want.SHA256 {
 				out = append(out, entity.DriftItem{DeviceID: d.ID, DeviceName: d.Name, Package: name, ExpectedSHA256: want.SHA256, ObservedSHA256: got, Kind: "changed"})
+			}
+		}
+		for name, observed := range d.InstalledPackages {
+			if _, ok := expected[name]; !ok {
+				out = append(out, entity.DriftItem{DeviceID: d.ID, DeviceName: d.Name, Package: name, ObservedSHA256: observed, Kind: "unexpected"})
 			}
 		}
 	}

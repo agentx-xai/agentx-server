@@ -69,7 +69,7 @@ mcp:
 
 - **Device**：Workspace 中注册的一台开发机或构建机。
 - **Heartbeat**：设备上报当前 Agent 和已安装包的摘要。
-- **Drift**：设备实际摘要与 Workspace Manifest 不一致的项目。
+- **Drift**：设备实际摘要与 Workspace Manifest 不一致的项目，区分 `missing`、`changed` 和 `unexpected`；显式空 Manifest 会把设备上所有已安装包报告为 `unexpected`。
 - **Reconcile plan**：服务端根据期望状态和设备状态生成的 `install`、`update`、`remove` 动作。
 
 ## 3. 安装和首次使用

@@ -68,6 +68,15 @@ func TestPostgresRepositoriesAndMigration(t *testing.T) {
 	if got, found, err := pr.LookupIdempotency(ctx, w.ID, "request-1"); err != nil || !found || got.SHA256 != release.SHA256 {
 		t.Fatalf("idempotency round trip failed: %+v %v %v", got, found, err)
 	}
+	if err = pr.StoreIdempotencyFingerprint(ctx, w.ID, "request-fingerprint", "first", release); err != nil {
+		t.Fatal(err)
+	}
+	if err = pr.StoreIdempotencyFingerprint(ctx, w.ID, "request-fingerprint", "first", release); err != nil {
+		t.Fatalf("same fingerprint should be idempotent: %v", err)
+	}
+	if err = pr.StoreIdempotencyFingerprint(ctx, w.ID, "request-fingerprint", "second", release); err == nil || !strings.Contains(err.Error(), "different request") {
+		t.Fatalf("different fingerprint should be rejected: %v", err)
+	}
 	dr := DeviceRepository{Store: store}
 	device := entity.Device{ID: uuid.NewString(), Name: "integration-device", Agent: "Codex", Status: "online", UpdatedAt: time.Now().UTC(), InstalledPackages: map[string]string{"integration": "abc"}}
 	if err = dr.SaveForWorkspace(ctx, w.ID, device); err != nil {

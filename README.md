@@ -73,14 +73,14 @@ make migrate
 - `/healthz`、`/readyz`：存活与就绪检查
 - `/v1/workspaces`：Workspace 和成员管理
 - `/v1/workspaces/{id}/manifest`：团队 Manifest 版本
-- `/v1/packages`：包版本列表、发布和下载
+- `/v1/workspaces/{id}/packages`：Workspace 包版本列表、发布、审批和下载
 - `/v1/workspaces/{id}/devices`：设备、heartbeat 和 reconcile plan
-- `/v1/drift`、`/v1/audit-events`：漂移和审计查询
+- `/v1/workspaces/{id}/drift`、`/v1/workspaces/{id}/audit-events`：漂移和审计查询
 
 CLI 通过 Registry API 使用服务端：
 
 ```bash
-agentx registry login http://localhost:8080 --token "$AGENTX_TOKEN"
+agentx registry login http://localhost:8080 --token "$AGENTX_TOKEN" --workspace "$AGENTX_WORKSPACE_ID"
 agentx registry publish review-skill 1.2.3 ./review-skill.tar
 agentx registry pull review-skill 1.2.3 --output ./review-skill.tar
 agentx team pull --output agentx.yaml

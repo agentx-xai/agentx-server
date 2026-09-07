@@ -55,3 +55,28 @@ func TestListForWorkspaceUsesManifestAsDesiredState(t *testing.T) {
 		t.Fatalf("manifest drift was not used: %+v", items)
 	}
 }
+
+func TestManifestWithNoPackagesDoesNotFallBackToRegistry(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	devices := file.NewDeviceRepo(dir)
+	packages := file.NewPackageRepo(dir)
+	manifests := file.NewWorkspaceRepo(dir)
+	now := time.Now().UTC()
+	if err := packages.SaveForWorkspace(ctx, "workspace-a", entity.Release{Name: "registry", Version: "1.0.0", SHA256: "registry", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifests.SaveManifest(ctx, entity.TeamManifest{WorkspaceID: "workspace-a", Revision: 1, Document: map[string]any{"packages": []any{}}, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := devices.SaveForWorkspace(ctx, "workspace-a", entity.Device{ID: "device-a", Name: "laptop", InstalledPackages: map[string]string{"registry": "registry"}}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := New(devices, packages, manifests).ListForWorkspace(ctx, "workspace-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != "unexpected" || items[0].Package != "registry" {
+		t.Fatalf("empty manifest should report unexpected package: %+v", items)
+	}
+}
