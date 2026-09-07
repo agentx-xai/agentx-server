@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 )
 
-type PackageRepo struct{ path string }
+type PackageRepo struct {
+	path string
+}
 
 type storedRelease struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
@@ -20,6 +22,8 @@ func NewPackageRepo(dir string) *PackageRepo {
 	return &PackageRepo{path: filepath.Join(dir, "packages.json")}
 }
 func (r *PackageRepo) List(_ context.Context) ([]entity.Release, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return nil, err
@@ -31,6 +35,8 @@ func (r *PackageRepo) List(_ context.Context) ([]entity.Release, error) {
 	return out, nil
 }
 func (r *PackageRepo) Save(ctx context.Context, p entity.Release) error {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err
@@ -43,6 +49,8 @@ func (r *PackageRepo) Save(ctx context.Context, p entity.Release) error {
 	return r.save(append(stored, storedRelease{Release: p}))
 }
 func (r *PackageRepo) ListForWorkspace(_ context.Context, workspaceID string) ([]entity.Release, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return nil, err
@@ -56,6 +64,8 @@ func (r *PackageRepo) ListForWorkspace(_ context.Context, workspaceID string) ([
 	return out, nil
 }
 func (r *PackageRepo) SaveForWorkspace(_ context.Context, workspaceID string, p entity.Release) error {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err
@@ -68,6 +78,8 @@ func (r *PackageRepo) SaveForWorkspace(_ context.Context, workspaceID string, p 
 	return r.save(append(stored, storedRelease{WorkspaceID: workspaceID, Release: p}))
 }
 func (r *PackageRepo) HasArtifactForWorkspace(_ context.Context, workspaceID, digest string) (bool, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return false, err
@@ -80,6 +92,8 @@ func (r *PackageRepo) HasArtifactForWorkspace(_ context.Context, workspaceID, di
 	return false, nil
 }
 func (r *PackageRepo) FindReleaseByDigestForWorkspace(_ context.Context, workspaceID, digest string) (entity.Release, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return entity.Release{}, err
@@ -92,6 +106,8 @@ func (r *PackageRepo) FindReleaseByDigestForWorkspace(_ context.Context, workspa
 	return entity.Release{}, os.ErrNotExist
 }
 func (r *PackageRepo) FindReleaseForWorkspace(_ context.Context, workspaceID, name, version string) (entity.Release, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return entity.Release{}, err
@@ -104,6 +120,8 @@ func (r *PackageRepo) FindReleaseForWorkspace(_ context.Context, workspaceID, na
 	return entity.Release{}, os.ErrNotExist
 }
 func (r *PackageRepo) ApproveReleaseForWorkspace(_ context.Context, workspaceID, name, version string) (entity.Release, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return entity.Release{}, err
@@ -149,35 +167,82 @@ func (r *PackageRepo) save(stored []storedRelease) error {
 	}
 	return os.Rename(tmp, r.path)
 }
-func (r *PackageRepo) LookupIdempotency(_ context.Context, workspaceID, key string) (entity.Release, bool, error) {
-	b, err := os.ReadFile(r.path + ".idempotency.json")
-	if os.IsNotExist(err) {
-		return entity.Release{}, false, nil
-	}
-	if err != nil {
-		return entity.Release{}, false, err
-	}
-	var entries map[string]entity.Release
-	if err = json.Unmarshal(b, &entries); err != nil {
-		return entity.Release{}, false, err
-	}
-	v, ok := entries[workspaceID+"\x00"+key]
-	return v, ok, nil
+
+type idempotencyEntry struct {
+	Fingerprint string         `json:"fingerprint,omitempty"`
+	Release     entity.Release `json:"release"`
 }
-func (r *PackageRepo) StoreIdempotency(_ context.Context, workspaceID, key string, v entity.Release) error {
-	entries := map[string]entity.Release{}
-	b, err := os.ReadFile(r.path + ".idempotency.json")
-	if err == nil {
-		if err = json.Unmarshal(b, &entries); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
+
+func (r *PackageRepo) LookupIdempotency(ctx context.Context, workspaceID, key string) (entity.Release, bool, error) {
+	v, found, _, err := r.LookupIdempotencyFingerprint(ctx, workspaceID, key)
+	return v, found, err
+}
+
+func (r *PackageRepo) LookupIdempotencyFingerprint(_ context.Context, workspaceID, key string) (entity.Release, bool, string, error) {
+	dataMu.Lock()
+	defer dataMu.Unlock()
+	entries, err := r.loadIdempotency()
+	if err != nil {
+		return entity.Release{}, false, "", err
+	}
+	entry, ok := entries[workspaceID+"\x00"+key]
+	if !ok {
+		return entity.Release{}, false, "", nil
+	}
+	return entry.Release, true, entry.Fingerprint, nil
+}
+
+func (r *PackageRepo) StoreIdempotency(ctx context.Context, workspaceID, key string, v entity.Release) error {
+	return r.StoreIdempotencyFingerprint(ctx, workspaceID, key, "", v)
+}
+
+func (r *PackageRepo) StoreIdempotencyFingerprint(_ context.Context, workspaceID, key, fingerprint string, v entity.Release) error {
+	dataMu.Lock()
+	defer dataMu.Unlock()
+	entries, err := r.loadIdempotency()
+	if err != nil {
 		return err
 	}
-	if _, ok := entries[workspaceID+"\x00"+key]; ok {
+	key = workspaceID + "\x00" + key
+	if existing, ok := entries[key]; ok {
+		if existing.Fingerprint != "" && fingerprint != "" && existing.Fingerprint != fingerprint {
+			return fmt.Errorf("idempotency key was already used for a different request")
+		}
 		return nil
 	}
-	entries[workspaceID+"\x00"+key] = v
+	entries[key] = idempotencyEntry{Fingerprint: fingerprint, Release: v}
+	return r.saveIdempotency(entries)
+}
+
+func (r *PackageRepo) loadIdempotency() (map[string]idempotencyEntry, error) {
+	b, err := os.ReadFile(r.path + ".idempotency.json")
+	if os.IsNotExist(err) {
+		return map[string]idempotencyEntry{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err = json.Unmarshal(b, &raw); err != nil {
+		return nil, err
+	}
+	entries := make(map[string]idempotencyEntry, len(raw))
+	for key, value := range raw {
+		var entry idempotencyEntry
+		if err := json.Unmarshal(value, &entry); err == nil && entry.Release.Name != "" {
+			entries[key] = entry
+			continue
+		}
+		var legacy entity.Release
+		if err := json.Unmarshal(value, &legacy); err != nil {
+			return nil, err
+		}
+		entries[key] = idempotencyEntry{Release: legacy}
+	}
+	return entries, nil
+}
+
+func (r *PackageRepo) saveIdempotency(entries map[string]idempotencyEntry) error {
 	raw, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err

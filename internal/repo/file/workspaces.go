@@ -7,12 +7,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
+	"strings"
 )
 
 type WorkspaceRepo struct {
 	path        string
-	mu          sync.Mutex
 	workspaces  []entity.Workspace
 	memberships []entity.Membership
 	policies    []entity.Policy
@@ -59,8 +58,8 @@ func (r *WorkspaceRepo) persist() error {
 	return os.Rename(tmp, r.path)
 }
 func (r *WorkspaceRepo) List(_ context.Context, userID string) ([]entity.Workspace, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return nil, err
 	}
@@ -77,8 +76,8 @@ func (r *WorkspaceRepo) List(_ context.Context, userID string) ([]entity.Workspa
 	return out, nil
 }
 func (r *WorkspaceRepo) Create(_ context.Context, w entity.Workspace, m entity.Membership) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}
@@ -92,8 +91,8 @@ func (r *WorkspaceRepo) Create(_ context.Context, w entity.Workspace, m entity.M
 	return r.persist()
 }
 func (r *WorkspaceRepo) Membership(_ context.Context, workspaceID, userID string) (entity.Membership, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return entity.Membership{}, err
 	}
@@ -105,8 +104,8 @@ func (r *WorkspaceRepo) Membership(_ context.Context, workspaceID, userID string
 	return entity.Membership{}, errors.New("membership not found")
 }
 func (r *WorkspaceRepo) Members(_ context.Context, workspaceID string) ([]entity.Membership, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return nil, err
 	}
@@ -119,8 +118,8 @@ func (r *WorkspaceRepo) Members(_ context.Context, workspaceID string) ([]entity
 	return out, nil
 }
 func (r *WorkspaceRepo) AddMember(_ context.Context, m entity.Membership) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}
@@ -133,8 +132,8 @@ func (r *WorkspaceRepo) AddMember(_ context.Context, m entity.Membership) error 
 	return r.persist()
 }
 func (r *WorkspaceRepo) UpdateMemberRole(_ context.Context, workspaceID, userID string, role entity.Role) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}
@@ -147,8 +146,8 @@ func (r *WorkspaceRepo) UpdateMemberRole(_ context.Context, workspaceID, userID 
 	return errors.New("membership not found")
 }
 func (r *WorkspaceRepo) RemoveMember(_ context.Context, workspaceID, userID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}
@@ -162,8 +161,8 @@ func (r *WorkspaceRepo) RemoveMember(_ context.Context, workspaceID, userID stri
 }
 
 func (r *WorkspaceRepo) DeleteWorkspace(_ context.Context, workspaceID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}
@@ -201,12 +200,100 @@ func (r *WorkspaceRepo) DeleteWorkspace(_ context.Context, workspaceID string) e
 		}
 	}
 	r.manifests = manifests
+	if err := r.cleanupWorkspaceData(workspaceID); err != nil {
+		return err
+	}
 	return r.persist()
 }
 
+// Workspace-owned data lives in separate files in the file backend. Keep
+// deletion equivalent to the PostgreSQL foreign-key cascades.
+func (r *WorkspaceRepo) cleanupWorkspaceData(workspaceID string) error {
+	if err := filterJSONFile(filepath.Join(filepath.Dir(r.path), "devices.json"), func(raw []byte) ([]byte, error) {
+		var items []storedDevice
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		out := items[:0]
+		for _, item := range items {
+			if item.WorkspaceID != workspaceID {
+				out = append(out, item)
+			}
+		}
+		return json.MarshalIndent(out, "", "  ")
+	}); err != nil {
+		return err
+	}
+	if err := filterJSONFile(filepath.Join(filepath.Dir(r.path), "packages.json"), func(raw []byte) ([]byte, error) {
+		var items []storedRelease
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		out := items[:0]
+		for _, item := range items {
+			if item.WorkspaceID != workspaceID {
+				out = append(out, item)
+			}
+		}
+		return json.MarshalIndent(out, "", "  ")
+	}); err != nil {
+		return err
+	}
+	if err := filterJSONFile(filepath.Join(filepath.Dir(r.path), "audit.json"), func(raw []byte) ([]byte, error) {
+		var items []storedAuditEvent
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		out := items[:0]
+		for _, item := range items {
+			if item.WorkspaceID != workspaceID {
+				out = append(out, item)
+			}
+		}
+		return json.MarshalIndent(out, "", "  ")
+	}); err != nil {
+		return err
+	}
+	if err := filterJSONFile(filepath.Join(filepath.Dir(r.path), "packages.json.idempotency.json"), func(raw []byte) ([]byte, error) {
+		var items map[string]idempotencyEntry
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return nil, err
+		}
+		prefix := workspaceID + "\x00"
+		for key := range items {
+			if strings.HasPrefix(key, prefix) {
+				delete(items, key)
+			}
+		}
+		return json.MarshalIndent(items, "", "  ")
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func filterJSONFile(path string, transform func([]byte) ([]byte, error)) error {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	updated, err := transform(raw)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, updated, 0640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 func (r *WorkspaceRepo) CurrentPolicy(_ context.Context, workspaceID string) (entity.Policy, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return entity.Policy{}, err
 	}
@@ -223,8 +310,8 @@ func (r *WorkspaceRepo) CurrentPolicy(_ context.Context, workspaceID string) (en
 }
 
 func (r *WorkspaceRepo) SavePolicy(_ context.Context, policy entity.Policy) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}
@@ -233,8 +320,8 @@ func (r *WorkspaceRepo) SavePolicy(_ context.Context, policy entity.Policy) erro
 }
 
 func (r *WorkspaceRepo) CurrentManifest(_ context.Context, workspaceID string) (entity.TeamManifest, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return entity.TeamManifest{}, err
 	}
@@ -251,8 +338,8 @@ func (r *WorkspaceRepo) CurrentManifest(_ context.Context, workspaceID string) (
 }
 
 func (r *WorkspaceRepo) SaveManifest(_ context.Context, manifest entity.TeamManifest) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	if err := r.load(); err != nil {
 		return err
 	}

@@ -1,5 +1,7 @@
 # AgentX Server
 
+[English](README.en.md) | 中文
+
 <p align="center"><img src="https://raw.githubusercontent.com/agentx-xai/.github/main/profile/agentx-mark.svg" alt="AgentX" width="88"></p>
 
 <p align="center">
@@ -60,6 +62,7 @@ make migrate
 | `AGENTX_OIDC_ISSUER` | OIDC issuer，用于 discovery/JWKS 验证 |
 | `AGENTX_ARTIFACT_STORE` | `file` 或 `s3` |
 | `AGENTX_S3_ENDPOINT` / `AGENTX_S3_BUCKET` | S3/MinIO 存储配置 |
+| `AGENTX_ALLOW_LEGACY_UNSCOPED` | 明确开启旧版无 workspace API；生产环境应保持 `false` |
 
 生产部署不应把凭据写入 Manifest 或 Artifact。详细示例见 [`.env.example`](.env.example)。
 
@@ -96,4 +99,4 @@ AGENTX_DATABASE_URL='postgres://agentx:agentx-staging@localhost:5433/agentx' ./s
 
 CI 会执行 `go test ./...`、`go vet ./...` 和两个服务二进制的构建。产品说明见 [`PRODUCT.md`](PRODUCT.md)，安全问题见 [`SECURITY.md`](SECURITY.md)。
 
-推送形如 `v0.1.2` 的 Tag 会触发 `.github/workflows/release.yml`，先运行测试、`go vet` 和二进制构建，再创建 GitHub Release 并上传 Server、Migrate、OpenAPI 和 migrations 压缩包。
+推送形如 `v0.1.2` 的 Tag 会触发 `.github/workflows/release.yml`，先运行测试、`go vet` 和二进制构建，再创建 GitHub Release 并上传 Server、Migrate、OpenAPI、migrations 压缩包和 SHA-256 校验和。Tag 可通过 GitHub Actions 的 `Tag` workflow 从指定分支创建。

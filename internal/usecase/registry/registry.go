@@ -5,7 +5,9 @@ import (
 	"agentx/server/internal/entity"
 	"agentx/server/internal/repo"
 	"agentx/server/internal/usecase/workspace"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"regexp"
@@ -46,7 +48,7 @@ func auditEvent(ctx context.Context, event entity.AuditEvent) entity.AuditEvent 
 	return event
 }
 func (s *Service) prepare(ctx context.Context, name, version string, r io.Reader, signatures ...string) (entity.Release, error) {
-	if strings.TrimSpace(name) == "" || !regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$`).MatchString(strings.TrimSpace(version)) {
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`).MatchString(strings.TrimSpace(name)) || !regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$`).MatchString(strings.TrimSpace(version)) {
 		return entity.Release{}, fmt.Errorf("package name and version are required")
 	}
 	v, err := s.store.Put(ctx, name, r)
@@ -55,6 +57,7 @@ func (s *Service) prepare(ctx context.Context, name, version string, r io.Reader
 	}
 	v.Version = version
 	v.Status = "published"
+	v.CreatedAt = time.Now().UTC()
 	if s.verifier != nil {
 		if len(signatures) == 0 || signatures[0] == "" {
 			return v, fmt.Errorf("artifact signature is required")
@@ -111,7 +114,7 @@ func (s *Service) PublishForWorkspace(ctx context.Context, workspaceID, name, ve
 		}
 		return v, nil
 	}
-	return s.Publish(ctx, name, version, r, signatures...)
+	return entity.Release{}, fmt.Errorf("workspace package repository is unavailable")
 }
 
 func (s *Service) releaseStatus(ctx context.Context, workspaceID string, signatures ...string) (string, error) {
@@ -154,21 +157,70 @@ func (s *Service) PublishForWorkspaceIdempotent(ctx context.Context, workspaceID
 		v, err := s.PublishForWorkspace(ctx, workspaceID, name, version, r, signatures...)
 		return v, false, err
 	}
+	payload, err := readIdempotentPayload(r)
+	if err != nil {
+		return entity.Release{}, false, err
+	}
+	fingerprint := requestFingerprint(name, version, firstSignature(signatures), payload)
 	s.idempotencyMu.Lock()
 	defer s.idempotencyMu.Unlock()
-	if existing, found, err := s.LookupIdempotency(ctx, workspaceID, key); err != nil {
+	if repository, ok := s.packages.(repo.IdempotencyFingerprintRepository); ok {
+		if existing, found, storedFingerprint, err := repository.LookupIdempotencyFingerprint(ctx, workspaceID, key); err != nil {
+			return entity.Release{}, false, err
+		} else if found {
+			if storedFingerprint != "" && storedFingerprint != fingerprint {
+				return entity.Release{}, false, fmt.Errorf("idempotency key was already used for a different request")
+			}
+			return existing, true, nil
+		}
+	} else if existing, found, err := s.LookupIdempotency(ctx, workspaceID, key); err != nil {
 		return entity.Release{}, false, err
 	} else if found {
 		return existing, true, nil
 	}
-	v, err := s.PublishForWorkspace(ctx, workspaceID, name, version, r, signatures...)
+	v, err := s.PublishForWorkspace(ctx, workspaceID, name, version, bytes.NewReader(payload), signatures...)
 	if err != nil {
 		return v, false, err
 	}
-	if err = s.StoreIdempotency(ctx, workspaceID, key, v); err != nil {
+	if repository, ok := s.packages.(repo.IdempotencyFingerprintRepository); ok {
+		err = repository.StoreIdempotencyFingerprint(ctx, workspaceID, key, fingerprint, v)
+	} else {
+		err = s.StoreIdempotency(ctx, workspaceID, key, v)
+	}
+	if err != nil {
 		return v, false, err
 	}
 	return v, false, nil
+}
+
+const maxIdempotentPayload = int64(51 << 20)
+
+func readIdempotentPayload(r io.Reader) ([]byte, error) {
+	payload, err := io.ReadAll(io.LimitReader(r, maxIdempotentPayload+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(payload)) > maxIdempotentPayload {
+		return nil, fmt.Errorf("artifact exceeds %d bytes", maxIdempotentPayload)
+	}
+	return payload, nil
+}
+
+func firstSignature(signatures []string) string {
+	if len(signatures) == 0 {
+		return ""
+	}
+	return signatures[0]
+}
+
+func requestFingerprint(name, version, signature string, payload []byte) string {
+	h := sha256.New()
+	for _, value := range []string{name, version, signature} {
+		_, _ = h.Write([]byte(value))
+		_, _ = h.Write([]byte{0})
+	}
+	_, _ = h.Write(payload)
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 func (s *Service) Open(ctx context.Context, digest string) (io.ReadCloser, error) {
 	return s.store.Open(ctx, digest)
@@ -236,7 +288,7 @@ func (s *Service) ListForWorkspace(ctx context.Context, workspaceID string) ([]e
 	if p, ok := s.packages.(repo.WorkspacePackageRepository); ok {
 		return p.ListForWorkspace(ctx, workspaceID)
 	}
-	return s.List(ctx)
+	return nil, fmt.Errorf("workspace package repository is unavailable")
 }
 func (s *Service) LookupIdempotency(ctx context.Context, workspaceID, key string) (entity.Release, bool, error) {
 	if r, ok := s.packages.(repo.IdempotencyRepository); ok {

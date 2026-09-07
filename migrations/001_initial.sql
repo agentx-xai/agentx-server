@@ -15,4 +15,5 @@ CREATE TABLE IF NOT EXISTS outbox (id uuid PRIMARY KEY DEFAULT gen_random_uuid()
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz;
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS last_error text;
 CREATE TABLE IF NOT EXISTS idempotency_keys (workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, key text NOT NULL, response_json jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (workspace_id, key));
+ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_fingerprint text;
 CREATE INDEX IF NOT EXISTS audit_events_workspace_created_idx ON audit_events(workspace_id, created_at DESC);

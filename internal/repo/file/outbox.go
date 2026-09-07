@@ -8,13 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 )
 
 type OutboxRepo struct {
 	path string
-	mu   sync.Mutex
 }
 
 func NewOutboxRepo(dir string) *OutboxRepo {
@@ -22,8 +20,8 @@ func NewOutboxRepo(dir string) *OutboxRepo {
 }
 
 func (r *OutboxRepo) Enqueue(_ context.Context, event entity.OutboxEvent) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	items, err := r.load()
 	if err != nil {
 		return err
@@ -33,8 +31,8 @@ func (r *OutboxRepo) Enqueue(_ context.Context, event entity.OutboxEvent) error 
 }
 
 func (r *OutboxRepo) Claim(_ context.Context, limit int) ([]entity.OutboxEvent, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	items, err := r.load()
 	if err != nil {
 		return nil, err
@@ -56,8 +54,8 @@ func (r *OutboxRepo) Claim(_ context.Context, limit int) ([]entity.OutboxEvent, 
 }
 
 func (r *OutboxRepo) MarkProcessed(_ context.Context, id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	items, err := r.load()
 	if err != nil {
 		return err
@@ -73,8 +71,8 @@ func (r *OutboxRepo) MarkProcessed(_ context.Context, id string) error {
 }
 
 func (r *OutboxRepo) MarkFailed(_ context.Context, id string, retryAt time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	items, err := r.load()
 	if err != nil {
 		return err
@@ -89,8 +87,8 @@ func (r *OutboxRepo) MarkFailed(_ context.Context, id string, retryAt time.Time)
 }
 
 func (r *OutboxRepo) MarkDeadLetter(_ context.Context, id, reason string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	dataMu.Lock()
+	defer dataMu.Unlock()
 	items, err := r.load()
 	if err != nil {
 		return err

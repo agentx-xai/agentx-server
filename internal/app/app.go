@@ -156,7 +156,7 @@ func New(cfg config.Config) (*Application, error) {
 		}
 		oidcVerifier = verifier
 	}
-	return &Application{Address: cfg.Address, Router: httpcontroller.NewRouter(devices, releases, httpcontroller.RouterOptions{Workspace: workspaces, Drift: drift.New(deviceRepo, packageRepo, manifestRepo), Policy: policies, Manifest: manifests, Reconcile: reconcile.New(deviceRepo, manifestRepo), OIDC: oidcVerifier, Ready: ready, AllowLegacyUnscoped: cfg.DatabaseURL == ""}), close: closeFn}, nil
+	return &Application{Address: cfg.Address, Router: httpcontroller.NewRouter(devices, releases, httpcontroller.RouterOptions{Workspace: workspaces, Drift: drift.New(deviceRepo, packageRepo, manifestRepo), Policy: policies, Manifest: manifests, Reconcile: reconcile.New(deviceRepo, manifestRepo), OIDC: oidcVerifier, Ready: ready, AllowLegacyUnscoped: cfg.AllowLegacyUnscoped}), close: closeFn}, nil
 }
 
 func artifactStoreForConfig(cfg config.Config) (repo.ArtifactStore, error) {

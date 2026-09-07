@@ -29,7 +29,7 @@ func (s *Service) Plan(ctx context.Context, workspaceID, deviceID string) (entit
 	if r, ok := s.devices.(repo.WorkspaceDeviceRepository); ok {
 		devices, err = r.ListForWorkspace(ctx, workspaceID)
 	} else {
-		devices, err = s.devices.List(ctx)
+		return entity.ReconcilePlan{}, fmt.Errorf("workspace device repository is unavailable")
 	}
 	if err != nil {
 		return entity.ReconcilePlan{}, err

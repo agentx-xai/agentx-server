@@ -39,7 +39,7 @@ func (s *Service) List(ctx context.Context) ([]entity.Workspace, error) {
 }
 func (s *Service) Create(ctx context.Context, name, slug string) (entity.Workspace, error) {
 	name, slug = strings.TrimSpace(name), strings.TrimSpace(strings.ToLower(slug))
-	if name == "" || !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`).MatchString(slug) {
+	if name == "" || len(name) > 128 || !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`).MatchString(slug) {
 		return entity.Workspace{}, errors.New("name and valid slug are required")
 	}
 	now := time.Now().UTC()
@@ -73,7 +73,7 @@ func (s *Service) AddMember(ctx context.Context, workspaceID, userID string, rol
 	if err := s.Authorize(ctx, workspaceID, entity.RoleAdmin); err != nil {
 		return err
 	}
-	if userID == "" || !memberRole(role) {
+	if userID == "" || len(userID) > 255 || !memberRole(role) {
 		return errors.New("valid member and role are required")
 	}
 	now := time.Now().UTC()
@@ -90,7 +90,7 @@ func (s *Service) UpdateMemberRole(ctx context.Context, workspaceID, userID stri
 	if err := s.Authorize(ctx, workspaceID, entity.RoleAdmin); err != nil {
 		return err
 	}
-	if userID == "" || !memberRole(role) {
+	if userID == "" || len(userID) > 255 || !memberRole(role) {
 		return errors.New("valid member and role are required")
 	}
 	current, err := s.repo.Membership(ctx, workspaceID, userID)
@@ -113,7 +113,7 @@ func (s *Service) RemoveMember(ctx context.Context, workspaceID, userID string) 
 	if err := s.Authorize(ctx, workspaceID, entity.RoleAdmin); err != nil {
 		return err
 	}
-	if userID == "" {
+	if userID == "" || len(userID) > 255 {
 		return errors.New("member is required")
 	}
 	current, err := s.repo.Membership(ctx, workspaceID, userID)

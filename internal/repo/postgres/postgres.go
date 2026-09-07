@@ -241,26 +241,34 @@ func (r PackageRepository) ApproveReleaseForWorkspace(ctx context.Context, works
 	return release, err
 }
 func (r PackageRepository) LookupIdempotency(ctx context.Context, workspaceID, key string) (entity.Release, bool, error) {
+	v, found, _, err := r.LookupIdempotencyFingerprint(ctx, workspaceID, key)
+	return v, found, err
+}
+func (r PackageRepository) LookupIdempotencyFingerprint(ctx context.Context, workspaceID, key string) (entity.Release, bool, string, error) {
 	var raw []byte
-	err := r.Pool.QueryRow(ctx, `SELECT response_json FROM idempotency_keys WHERE workspace_id=$1 AND key=$2`, workspaceID, key).Scan(&raw)
+	var fingerprint string
+	err := r.Pool.QueryRow(ctx, `SELECT response_json,COALESCE(request_fingerprint,'') FROM idempotency_keys WHERE workspace_id=$1 AND key=$2`, workspaceID, key).Scan(&raw, &fingerprint)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return entity.Release{}, false, nil
+		return entity.Release{}, false, "", nil
 	}
 	if err != nil {
-		return entity.Release{}, false, err
+		return entity.Release{}, false, "", err
 	}
 	var v entity.Release
 	if err = json.Unmarshal(raw, &v); err != nil {
-		return entity.Release{}, false, err
+		return entity.Release{}, false, "", err
 	}
-	return v, true, nil
+	return v, true, fingerprint, nil
 }
 func (r PackageRepository) StoreIdempotency(ctx context.Context, workspaceID, key string, v entity.Release) error {
+	return r.StoreIdempotencyFingerprint(ctx, workspaceID, key, "", v)
+}
+func (r PackageRepository) StoreIdempotencyFingerprint(ctx context.Context, workspaceID, key, fingerprint string, v entity.Release) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	_, err = r.Pool.Exec(ctx, `INSERT INTO idempotency_keys(workspace_id,key,response_json) VALUES($1,$2,$3) ON CONFLICT(workspace_id,key) DO NOTHING`, workspaceID, key, raw)
+	_, err = r.Pool.Exec(ctx, `INSERT INTO idempotency_keys(workspace_id,key,response_json,request_fingerprint) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,key) DO UPDATE SET request_fingerprint=COALESCE(idempotency_keys.request_fingerprint,EXCLUDED.request_fingerprint)`, workspaceID, key, raw, fingerprint)
 	return err
 }
 

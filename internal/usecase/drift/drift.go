@@ -4,6 +4,7 @@ import (
 	"agentx/server/internal/entity"
 	"agentx/server/internal/repo"
 	"context"
+	"fmt"
 )
 
 type Service struct {
@@ -30,15 +31,17 @@ func (s *Service) List(ctx context.Context) ([]entity.DriftItem, error) {
 	}
 	return calculate(devices, releases), nil
 }
-func (s *Service) calculateForWorkspace(ctx context.Context, workspaceID string, devices []entity.Device, releases []entity.Release) []entity.DriftItem {
+func (s *Service) calculateForWorkspace(ctx context.Context, workspaceID string, devices []entity.Device, releases []entity.Release) ([]entity.DriftItem, error) {
 	if s.manifests != nil {
-		if manifest, err := s.manifests.CurrentManifest(ctx, workspaceID); err == nil {
-			if expected := expectedFromManifest(manifest.Document); len(expected) > 0 {
-				return calculate(devices, expected)
-			}
+		manifest, err := s.manifests.CurrentManifest(ctx, workspaceID)
+		if err != nil {
+			return nil, err
+		}
+		if expected := expectedFromManifest(manifest.Document); len(expected) > 0 {
+			return calculate(devices, expected), nil
 		}
 	}
-	return calculate(devices, releases)
+	return calculate(devices, releases), nil
 }
 
 func expectedFromManifest(document map[string]any) []entity.Release {
@@ -70,7 +73,7 @@ func (s *Service) ListForWorkspace(ctx context.Context, workspaceID string) ([]e
 	if r, ok := s.devices.(repo.WorkspaceDeviceRepository); ok {
 		devices, err = r.ListForWorkspace(ctx, workspaceID)
 	} else {
-		devices, err = s.devices.List(ctx)
+		return nil, fmt.Errorf("workspace device repository is unavailable")
 	}
 	if err != nil {
 		return nil, err
@@ -78,12 +81,12 @@ func (s *Service) ListForWorkspace(ctx context.Context, workspaceID string) ([]e
 	if r, ok := s.packages.(repo.WorkspacePackageRepository); ok {
 		releases, err = r.ListForWorkspace(ctx, workspaceID)
 	} else {
-		releases, err = s.packages.List(ctx)
+		return nil, fmt.Errorf("workspace package repository is unavailable")
 	}
 	if err != nil {
 		return nil, err
 	}
-	return calculate(devices, releases), nil
+	return s.calculateForWorkspace(ctx, workspaceID, devices, releases)
 }
 func calculate(devices []entity.Device, releases []entity.Release) []entity.DriftItem {
 	expected := map[string]entity.Release{}

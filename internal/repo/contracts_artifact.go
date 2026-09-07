@@ -36,6 +36,14 @@ type IdempotencyRepository interface {
 	StoreIdempotency(context.Context, string, string, entity.Release) error
 }
 
+// IdempotencyFingerprintRepository lets callers detect accidental reuse of a
+// key for a different request. Implementations should persist the fingerprint
+// atomically with the response record.
+type IdempotencyFingerprintRepository interface {
+	LookupIdempotencyFingerprint(context.Context, string, string) (entity.Release, bool, string, error)
+	StoreIdempotencyFingerprint(context.Context, string, string, string, entity.Release) error
+}
+
 type SignatureVerifier interface {
 	Verify(context.Context, []byte, string) error
 }

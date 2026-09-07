@@ -151,7 +151,7 @@ func TestWorkspaceReleaseIdempotency(t *testing.T) {
 	if approve.Code != http.StatusOK || !bytes.Contains(approve.Body.Bytes(), []byte(`"status":"approved"`)) {
 		t.Fatalf("approve release: %d %s", approve.Code, approve.Body.String())
 	}
-	second := publish("second")
+	second := publish("first")
 	if second.Code != http.StatusCreated {
 		t.Fatalf("retry publish: %d %s", second.Code, second.Body.String())
 	}
@@ -162,6 +162,10 @@ func TestWorkspaceReleaseIdempotency(t *testing.T) {
 	_ = json.Unmarshal(second.Body.Bytes(), &b)
 	if a.SHA256 == "" || a.SHA256 != b.SHA256 {
 		t.Fatalf("idempotency mismatch: %s %s", a.SHA256, b.SHA256)
+	}
+	mismatch := publish("second")
+	if mismatch.Code != http.StatusBadRequest || !bytes.Contains(mismatch.Body.Bytes(), []byte("different request")) {
+		t.Fatalf("expected idempotency mismatch rejection: %d %s", mismatch.Code, mismatch.Body.String())
 	}
 	artifact := httptest.NewRecorder()
 	r.ServeHTTP(artifact, httptest.NewRequest(http.MethodGet, "/v1/workspaces/"+ws.ID+"/artifacts/"+a.SHA256, nil))

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -86,6 +87,9 @@ func middleware() gin.HandlerFunc {
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
+		}
+		if c.Request.Body != nil && c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead && !strings.HasPrefix(strings.ToLower(c.GetHeader("Content-Type")), "multipart/form-data") {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 		}
 		c.Next()
 		slog.Default().Info("http_request", "request_id", id, "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status(), "duration_ms", time.Since(started).Milliseconds())

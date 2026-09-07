@@ -6,6 +6,7 @@ import (
 	"agentx/server/internal/repo"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -34,10 +35,10 @@ func (s *Service) ListForWorkspace(ctx context.Context, workspaceID string) ([]e
 	if r, ok := s.devices.(repo.WorkspaceDeviceRepository); ok {
 		return r.ListForWorkspace(ctx, workspaceID)
 	}
-	return s.List(ctx)
+	return nil, fmt.Errorf("workspace device repository is unavailable")
 }
 func (s *Service) Register(ctx context.Context, d entity.Device) (entity.Device, error) {
-	if strings.TrimSpace(d.Name) == "" {
+	if strings.TrimSpace(d.Name) == "" || len(strings.TrimSpace(d.Name)) > 128 {
 		return d, errors.New("device name is required")
 	}
 	if strings.TrimSpace(d.ID) == "" {
@@ -51,7 +52,7 @@ func (s *Service) Register(ctx context.Context, d entity.Device) (entity.Device,
 	return d, nil
 }
 func (s *Service) RegisterForWorkspace(ctx context.Context, workspaceID string, d entity.Device) (entity.Device, error) {
-	if strings.TrimSpace(d.Name) == "" {
+	if strings.TrimSpace(d.Name) == "" || len(strings.TrimSpace(d.Name)) > 128 {
 		return d, errors.New("device name is required")
 	}
 	if strings.TrimSpace(d.ID) == "" {
@@ -68,7 +69,7 @@ func (s *Service) RegisterForWorkspace(ctx context.Context, workspaceID string, 
 		s.enqueue(ctx, workspaceID, "device.registered", map[string]any{"workspace_id": workspaceID, "device_id": d.ID})
 		return d, nil
 	}
-	return s.Register(ctx, d)
+	return d, fmt.Errorf("workspace device repository is unavailable")
 }
 func (s *Service) Heartbeat(ctx context.Context, id string) error {
 	v, e := s.devices.List(ctx)
@@ -136,5 +137,5 @@ func (s *Service) AuditForWorkspace(ctx context.Context, workspaceID string) ([]
 	if r, ok := s.audit.(repo.WorkspaceAuditRepository); ok {
 		return r.ListForWorkspace(ctx, workspaceID)
 	}
-	return s.Audit(ctx)
+	return nil, fmt.Errorf("workspace audit repository is unavailable")
 }
