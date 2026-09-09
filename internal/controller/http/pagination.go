@@ -1,6 +1,7 @@
 package http
 
 import (
+	"agentx/server/internal/repo"
 	"encoding/base64"
 	"fmt"
 	"strconv"
@@ -12,6 +13,41 @@ type pageResult[T any] struct {
 	Items      []T    `json:"items"`
 	Count      int    `json:"count"`
 	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+func pageRequest(c *gin.Context) (repo.PageRequest, error) {
+	limit := 50
+	if raw, ok := c.GetQuery("limit"); ok {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 200 {
+			return repo.PageRequest{}, fmt.Errorf("limit must be between 1 and 200")
+		}
+		limit = value
+	}
+	offset := 0
+	if cursor, ok := c.GetQuery("cursor"); ok && cursor != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil {
+			return repo.PageRequest{}, fmt.Errorf("invalid cursor")
+		}
+		offset, err = strconv.Atoi(string(raw))
+		if err != nil || offset < 0 {
+			return repo.PageRequest{}, fmt.Errorf("invalid cursor")
+		}
+	}
+	return repo.PageRequest{Limit: limit, Offset: offset}, nil
+}
+
+func writeRepositoryPage[T any](c *gin.Context, request repo.PageRequest, page repo.Page[T]) {
+	next := ""
+	if request.Offset+len(page.Items) < page.Total {
+		next = base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(request.Offset + len(page.Items))))
+		c.Header("X-Next-Cursor", next)
+	}
+	if page.Items == nil {
+		page.Items = []T{}
+	}
+	c.JSON(200, pageResult[T]{Items: page.Items, Count: page.Total, NextCursor: next})
 }
 
 func collectionPage(c *gin.Context, total int) (limit, offset int, paged bool, err error) {

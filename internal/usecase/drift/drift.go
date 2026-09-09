@@ -5,6 +5,7 @@ import (
 	"agentx/server/internal/repo"
 	"context"
 	"fmt"
+	"sort"
 )
 
 type Service struct {
@@ -37,59 +38,34 @@ func (s *Service) calculateForWorkspace(ctx context.Context, workspaceID string,
 		if err != nil {
 			return nil, err
 		}
-		expected := expectedFromManifest(manifest.Document)
-		if manifest.Revision > 0 || hasDesiredPackages(manifest.Document) {
+		if manifest.Revision > 0 {
+			desired, parseErr := entity.ParseDesiredManifest(manifest.Document)
+			if parseErr != nil {
+				return nil, fmt.Errorf("stored manifest is invalid: %w", parseErr)
+			}
+			expected := make([]entity.Release, 0, len(desired))
+			for _, item := range desired {
+				expected = append(expected, entity.Release{Name: item.Name, Version: item.Version, SHA256: item.SHA256})
+			}
 			return calculate(devices, expected), nil
 		}
 	}
 	return calculate(devices, releases), nil
 }
-
-func hasDesiredPackages(document map[string]any) bool {
-	_, packages := document["packages"]
-	_, skills := document["skills"]
-	return packages || skills
-}
-
-func expectedFromManifest(document map[string]any) []entity.Release {
-	var expected []entity.Release
-	for _, key := range []string{"packages", "skills"} {
-		entries, ok := document[key].([]any)
-		if !ok {
-			continue
-		}
-		for _, raw := range entries {
-			item, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _ := item["name"].(string)
-			digest, _ := item["sha256"].(string)
-			version, _ := item["version"].(string)
-			if name != "" && digest != "" {
-				expected = append(expected, entity.Release{Name: name, Version: version, SHA256: digest})
-			}
-		}
-	}
-	return expected
-}
 func (s *Service) ListForWorkspace(ctx context.Context, workspaceID string) ([]entity.DriftItem, error) {
-	var devices []entity.Device
-	var releases []entity.Release
-	var err error
-	if r, ok := s.devices.(repo.WorkspaceDeviceRepository); ok {
-		devices, err = r.ListForWorkspace(ctx, workspaceID)
-	} else {
-		return nil, fmt.Errorf("workspace device repository is unavailable")
+	deviceRepo, ok := s.devices.(repo.WorkspaceDeviceRepository)
+	if !ok {
+		return nil, fmt.Errorf("workspace device persistence is unavailable")
 	}
+	devices, err := deviceRepo.ListForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	if r, ok := s.packages.(repo.WorkspacePackageRepository); ok {
-		releases, err = r.ListForWorkspace(ctx, workspaceID)
-	} else {
-		return nil, fmt.Errorf("workspace package repository is unavailable")
+	packageRepo, ok := s.packages.(repo.WorkspacePackageRepository)
+	if !ok {
+		return nil, fmt.Errorf("workspace package persistence is unavailable")
 	}
+	releases, err := packageRepo.ListForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -114,9 +90,18 @@ func calculate(devices []entity.Device, releases []entity.Release) []entity.Drif
 		}
 		for name, observed := range d.InstalledPackages {
 			if _, ok := expected[name]; !ok {
-				out = append(out, entity.DriftItem{DeviceID: d.ID, DeviceName: d.Name, Package: name, ObservedSHA256: observed, Kind: "unexpected"})
+				out = append(out, entity.DriftItem{DeviceID: d.ID, DeviceName: d.Name, Package: name, ObservedSHA256: observed, Kind: "extra"})
 			}
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DeviceID != out[j].DeviceID {
+			return out[i].DeviceID < out[j].DeviceID
+		}
+		if out[i].Package != out[j].Package {
+			return out[i].Package < out[j].Package
+		}
+		return out[i].Kind < out[j].Kind
+	})
 	return out
 }

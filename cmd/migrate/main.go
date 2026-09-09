@@ -2,15 +2,30 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 func main() {
+	action := "up"
+	if len(os.Args) > 2 {
+		fatal("usage: agentx-migrate [up|status|version|down]")
+	}
+	if len(os.Args) == 2 {
+		action = os.Args[1]
+	}
+	if action != "up" && action != "status" && action != "version" && action != "down" {
+		fatal("unknown command %q; use up, status, version, or down", action)
+	}
+	if action == "down" && os.Getenv("AGENTX_ALLOW_MIGRATION_DOWN") != "true" {
+		fatal("down migrations require AGENTX_ALLOW_MIGRATION_DOWN=true and a verified database backup")
+	}
 	url := os.Getenv("AGENTX_DATABASE_URL")
 	if url == "" {
 		fatal("AGENTX_DATABASE_URL is required")
@@ -19,32 +34,56 @@ func main() {
 	if dir == "" {
 		dir = "./migrations"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	db, err := pgxpool.New(ctx, url)
+	db, err := sql.Open("pgx", url)
 	if err != nil {
 		fatal("open database: %v", err)
 	}
 	defer db.Close()
-	if err = db.Ping(ctx); err != nil {
+	if err = db.PingContext(ctx); err != nil {
 		fatal("ping database: %v", err)
 	}
-	entries, err := os.ReadDir(dir)
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 300), lock.WithUnlockTimeout(1, 30))
 	if err != nil {
-		fatal("read migrations: %v", err)
+		fatal("create migration lock: %v", err)
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, os.DirFS(dir), goose.WithSessionLocker(locker))
+	if err != nil {
+		fatal("load migrations: %v", err)
+	}
+	switch action {
+	case "up":
+		results, err := provider.Up(ctx)
 		if err != nil {
-			fatal("read %s: %v", entry.Name(), err)
+			fatal("apply migrations: %v", err)
 		}
-		if _, err = db.Exec(ctx, string(raw)); err != nil {
-			fatal("apply %s: %v", entry.Name(), err)
+		if len(results) == 0 {
+			fmt.Println("database schema is current")
 		}
-		fmt.Printf("applied %s\n", entry.Name())
+		for _, result := range results {
+			fmt.Println(result)
+		}
+	case "status":
+		statuses, err := provider.Status(ctx)
+		if err != nil {
+			fatal("read migration status: %v", err)
+		}
+		for _, status := range statuses {
+			fmt.Printf("%03d %-7s %s\n", status.Source.Version, status.State, status.Source.Path)
+		}
+	case "version":
+		version, err := provider.GetDBVersion(ctx)
+		if err != nil {
+			fatal("read migration version: %v", err)
+		}
+		fmt.Println(version)
+	case "down":
+		result, err := provider.Down(ctx)
+		if err != nil {
+			fatal("roll back migration: %v", err)
+		}
+		fmt.Println(result)
 	}
 }
 func fatal(format string, args ...any) {

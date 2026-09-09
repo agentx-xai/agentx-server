@@ -1,875 +1,786 @@
 openapi: 3.0.3
 info:
   title: AgentX Registry API
-  version: 0.1.0
+  version: 0.8.0
   description: |
-    Workspace-scoped Registry, policy, manifest, device, Drift, reconcile, and audit API.
-    JSON request bodies are limited to 2 MiB. Multipart release requests are limited to
-    51 MiB. All responses include `X-Request-ID`; JSON errors use the stable `ErrorEnvelope`.
-
-    `/v1` and `/metrics` require a Bearer token whenever API-token, JWT, or OIDC
-    authentication is configured. Legacy unscoped routes are disabled unless
-    `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-servers:
-  - url: http://localhost:8080
+    Hosted AgentX API. Business routes require a bearer token and return a stable
+    ErrorEnvelope on JSON errors. Unknown dependency failures are logged with the
+    request ID and return stable non-sensitive messages. Workspace roles are
+    hierarchical: viewer, developer, admin, owner. Legacy unscoped routes are
+    disabled in hosted mode. Device and release creation require idempotency keys.
+    Expected duplicate and missing-resource outcomes use stable public 4xx envelopes;
+    unexpected repository and dependency failures remain non-sensitive 500 responses.
 security:
-  - BearerAuth: []
+  - bearerAuth: []
+servers:
+  - url: https://{host}
+    description: Hosted deployment
+    variables:
+      host: { default: registry.example.com }
 paths:
   /healthz:
     get:
-      summary: Liveness probe
+      operationId: healthCheck
+      summary: Process liveness
       security: []
       responses:
-        '200':
-          description: Service is alive
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Health' }
+        '200': { description: Healthy process }
   /readyz:
     get:
-      summary: Readiness probe
+      operationId: readinessCheck
+      summary: Database and artifact-store readiness
       security: []
       responses:
-        '200':
-          description: Dependencies are ready
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '503':
-          description: A configured dependency is not ready
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
+        '200': { description: Dependencies ready }
+        '503': { '$ref': '#/components/responses/ServiceUnavailable' }
   /metrics:
     get:
+      operationId: getMetrics
       summary: Prometheus metrics
+      security: []
       responses:
         '200':
           description: Prometheus text exposition
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
           content:
-            text/plain:
-              schema: { type: string }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+            text/plain: { schema: { type: string } }
+  /v1/auth/config:
+    get:
+      operationId: getOIDCClientConfig
+      summary: Public OIDC Device Authorization configuration for the CLI
+      description: Returns public issuer, client ID, audience, and scope values; never returns a client secret.
+      security: []
+      responses:
+        '200':
+          description: OIDC Device Authorization configuration
+          content:
+            application/json: { schema: { '$ref': '#/components/schemas/OIDCClientConfig' } }
+        '404': { '$ref': '#/components/responses/NotFound' }
+  /v1/site/config:
+    get:
+      operationId: getPublicSiteConfig
+      summary: Public legal and operational contact configuration
+      description: Returns only owner-supplied public URLs and staffed contact addresses. Hosted startup fails when any value is absent.
+      security: []
+      responses:
+        '200': { description: Public site configuration, content: { application/json: { schema: { '$ref': '#/components/schemas/SiteConfig' } } } }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/me:
     get:
-      summary: Get the authenticated principal
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
+      operationId: getCurrentPrincipal
+      summary: Current authenticated principal
       responses:
         '200':
-          description: Current principal, or the anonymous principal when auth is disabled
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
+          description: Principal
           content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Principal' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+            application/json: { schema: { '$ref': '#/components/schemas/Principal' } }
+        '401': { '$ref': '#/components/responses/Unauthorized' }
+    delete:
+      operationId: deleteCurrentAccount
+      summary: Delete the current account
+      description: Atomically removes the user and non-owner memberships, deletes invitations addressed to the account email, anonymizes retained actor references, and emits an anonymous deletion audit/outbox record. The request fails while the account owns any Workspace or is under an active legal hold.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirmation]
+              properties:
+                confirmation: { type: string, enum: [DELETE] }
+      responses:
+        '204': { description: Account data deleted }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '401': { '$ref': '#/components/responses/Unauthorized' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+  /v1/me/export:
+    get:
+      operationId: exportCurrentAccount
+      summary: Export the current account data
+      description: Returns identity data stored for the current account, current Workspace memberships, invitations addressed to its verified email, and audit-event summaries attributed to it. Metadata belonging to a Workspace is not included.
+      responses:
+        '200':
+          description: Complete current account export
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json: { schema: { '$ref': '#/components/schemas/AccountExport' } }
+        '401': { '$ref': '#/components/responses/Unauthorized' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+  /v1/admin/legal-holds:
+    get:
+      operationId: listLegalHolds
+      summary: List platform legal holds
+      description: Requires a principal explicitly configured as a platform compliance administrator. Workspace roles, including owner, do not grant access.
+      parameters:
+        - { '$ref': '#/components/parameters/Limit' }
+        - { '$ref': '#/components/parameters/Cursor' }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [active, released] } }
+        - { name: target_type, in: query, required: false, schema: { '$ref': '#/components/schemas/LegalHoldTargetType' } }
+        - { name: target_id, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { '$ref': '#/components/responses/LegalHoldPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+    post:
+      operationId: createLegalHold
+      summary: Place a platform legal hold
+      description: Requires a configured platform compliance administrator. An active hold blocks deletion of the target account or Workspace and excludes its attributed audit events from retention pruning.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { '$ref': '#/components/schemas/LegalHoldCreate' } }
+      responses:
+        '201': { description: Legal hold created, content: { application/json: { schema: { '$ref': '#/components/schemas/LegalHold' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+  /v1/admin/legal-holds/{id}/release:
+    post:
+      operationId: releaseLegalHold
+      summary: Release a platform legal hold
+      description: Requires a configured platform compliance administrator, the exact RELEASE confirmation, and a release reason. Released hold records and their lifecycle audits are retained.
+      parameters: [{ '$ref': '#/components/parameters/LegalHoldID' }]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { '$ref': '#/components/schemas/LegalHoldRelease' } }
+      responses:
+        '200': { description: Legal hold released, content: { application/json: { schema: { '$ref': '#/components/schemas/LegalHold' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+  /v1/invitations:
+    get:
+      operationId: listMyWorkspaceInvitations
+      summary: List pending invitations for the authenticated verified email
+      description: Requires an explicit true email_verified OIDC claim. Only non-expired pending invitations for the canonical authenticated email are returned.
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
+      responses:
+        '200': { '$ref': '#/components/responses/InvitationPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+  /v1/invitations/{invitation_id}/claim:
+    post:
+      operationId: claimWorkspaceInvitation
+      summary: Claim a pending invitation
+      description: Atomically creates membership only when the authenticated principal has an explicit true email_verified claim matching the invitation email.
+      parameters: [{ '$ref': '#/components/parameters/InvitationID' }]
+      responses:
+        '200': { description: Claimed invitation, content: { application/json: { schema: { '$ref': '#/components/schemas/WorkspaceInvitation' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces:
     get:
-      summary: List authorized Workspaces
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      operationId: listWorkspaces
+      summary: List workspaces visible to the principal
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated Workspace collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/WorkspacePage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '200': { '$ref': '#/components/responses/WorkspacePage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '401': { '$ref': '#/components/responses/Unauthorized' }
     post:
-      summary: Create a Workspace
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
+      operationId: createWorkspace
+      summary: Create a workspace and owner membership
+      description: A duplicate slug returns a public 400 conflict envelope.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateWorkspaceRequest' }
+            schema:
+              type: object
+              required: [name, slug]
+              properties:
+                name: { type: string, minLength: 1 }
+                slug: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$' }
       responses:
-        '201':
-          description: Workspace created; caller becomes owner
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Workspace' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '201': { description: Created workspace, content: { application/json: { schema: { '$ref': '#/components/schemas/Workspace' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
   /v1/workspaces/{id}:
     delete:
-      summary: Delete a Workspace and its owned data
-      description: Requires the owner role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: deleteWorkspace
+      summary: Delete a workspace
+      description: Requires owner. The database deletion, retained tombstone audit, and one durable cleanup event per candidate artifact commit atomically; the worker deletes only globally unreferenced digests. An active platform legal hold blocks deletion.
+      x-agentx-minimum-role: owner
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }]
       responses:
-        '204':
-          description: Workspace deleted
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '204': { description: Deleted }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/members:
     get:
-      summary: List Workspace members
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      operationId: listWorkspaceMembers
+      summary: List workspace memberships
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated member collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MembershipPage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '200': { '$ref': '#/components/responses/MembershipPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+  /v1/workspaces/{id}/invitations:
+    get:
+      operationId: listWorkspaceInvitations
+      summary: List workspace invitations
+      description: Requires admin. Includes pending, accepted, revoked, and expired invitation records.
+      x-agentx-minimum-role: admin
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
+      responses:
+        '200': { '$ref': '#/components/responses/InvitationPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
     post:
-      summary: Add a Workspace member
-      description: Requires the admin role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: createWorkspaceInvitation
+      summary: Create an expiring workspace invitation
+      description: Requires admin. Email is canonicalized and the role cannot be owner. Lifetime defaults to seven days and must be between 15 minutes and 30 days.
+      x-agentx-minimum-role: admin
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }]
       requestBody:
         required: true
         content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AddMemberRequest' }
+          application/json: { schema: { '$ref': '#/components/schemas/InvitationCreate' } }
       responses:
-        '201':
-          description: Member added
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-  /v1/workspaces/{id}/members/{user_id}:
-    patch:
-      summary: Change a member role
-      description: Requires the admin role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/UserID' }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/UpdateMemberRoleRequest' }
-      responses:
-        '204':
-          description: Role updated
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '201': { description: Created invitation, content: { application/json: { schema: { '$ref': '#/components/schemas/WorkspaceInvitation' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+  /v1/workspaces/{id}/invitations/{invitation_id}:
     delete:
-      summary: Remove a Workspace member
-      description: Requires the admin role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/UserID' }
+      operationId: revokeWorkspaceInvitation
+      summary: Revoke a pending workspace invitation
+      description: Requires admin. Accepted, expired, and already revoked invitations cannot be revoked.
+      x-agentx-minimum-role: admin
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/InvitationID' }]
       responses:
-        '204':
-          description: Member removed
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '204': { description: Invitation revoked }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
+  /v1/workspaces/{id}/members/{user_id}:
+    parameters:
+      - { '$ref': '#/components/parameters/WorkspaceID' }
+      - { name: user_id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: updateWorkspaceMemberRole
+      summary: Change a member role
+      description: Requires admin. Owner membership cannot be changed.
+      x-agentx-minimum-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties: { role: { '$ref': '#/components/schemas/AssignableRole' } }
+      responses:
+        '204': { description: Role updated }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
+    delete:
+      operationId: removeWorkspaceMember
+      summary: Remove a member
+      description: Requires admin. Owner membership cannot be removed.
+      x-agentx-minimum-role: admin
+      responses:
+        '204': { description: Member removed }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/packages:
     get:
-      summary: List Workspace package releases
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      operationId: listWorkspaceReleases
+      summary: List immutable package releases
+      description: Requires viewer. PostgreSQL applies limit and cursor before returning rows.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated release collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ReleasePage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '500': { $ref: '#/components/responses/InternalError' }
+        '200': { '$ref': '#/components/responses/ReleasePage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
   /v1/workspaces/{id}/packages/{name}/releases:
     post:
-      summary: Publish an immutable package release
-      description: Requires the developer role. Multipart request bodies are limited to 51 MiB.
+      operationId: publishWorkspaceRelease
+      summary: Publish an immutable Skill release
+      description: |
+        Requires developer. Artifact is a gzip-compressed POSIX tar archive no larger
+        than 51 MiB compressed. It must contain root SKILL.md and only regular
+        files/directories. Traversal, duplicate names, links, device entries,
+        executable files, credential filenames, and decompression limits are rejected.
+        A package/version already present in the workspace, or incompatible reuse of
+        an idempotency key, returns a public 400 conflict envelope.
+      x-agentx-minimum-role: developer
       parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/PackageName' }
-        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { '$ref': '#/components/parameters/WorkspaceID' }
+        - { '$ref': '#/components/parameters/PackageName' }
+        - { '$ref': '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           multipart/form-data:
-            schema: { $ref: '#/components/schemas/PublishReleaseRequest' }
+            schema:
+              type: object
+              required: [version, artifact]
+              properties:
+                version: { type: string, minLength: 1 }
+                artifact: { type: string, format: binary, description: Deterministic gzip tar Skill archive }
+                signature: { type: string, format: byte, description: Base64 Ed25519 signature over exact artifact bytes }
       responses:
         '201':
-          description: Release created, or the original response replayed
+          description: Published, or replayed with X-Idempotent-Replay true
           headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Idempotent-Replay:
-              description: "`true` when a stored response was replayed"
-              schema: { type: string, enum: ['true'] }
+            X-Idempotent-Replay: { schema: { type: string, enum: ['true'] } }
           content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Release' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+            application/json: { schema: { '$ref': '#/components/schemas/Release' } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
   /v1/workspaces/{id}/artifacts/{digest}:
     get:
-      summary: Download a Workspace artifact by SHA-256
-      description: Requires the viewer role. Pending releases are unavailable.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/Digest' }
+      operationId: downloadWorkspaceArtifact
+      summary: Download an artifact by SHA-256
+      description: Requires viewer. Digest must belong to this workspace.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Digest' }]
       responses:
-        '200':
-          description: Artifact bytes
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '200': { '$ref': '#/components/responses/Artifact' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/packages/{name}/{version}/download:
     get:
-      summary: Download a package release
-      description: Requires the viewer role. Pending releases are unavailable.
+      operationId: downloadWorkspaceRelease
+      summary: Download an approved release
+      description: Requires viewer. Pending approval releases are not downloadable.
+      x-agentx-minimum-role: viewer
       parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/PackageName' }
-        - { $ref: '#/components/parameters/Version' }
+        - { '$ref': '#/components/parameters/WorkspaceID' }
+        - { '$ref': '#/components/parameters/PackageName' }
+        - { '$ref': '#/components/parameters/Version' }
       responses:
-        '200':
-          description: Artifact bytes
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '200': { '$ref': '#/components/responses/Artifact' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/packages/{name}/{version}/approve:
     post:
-      summary: Approve a package release
-      description: Requires the admin role.
+      operationId: approveWorkspaceRelease
+      summary: Approve a pending release
+      description: Requires admin.
+      x-agentx-minimum-role: admin
       parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/PackageName' }
-        - { $ref: '#/components/parameters/Version' }
+        - { '$ref': '#/components/parameters/WorkspaceID' }
+        - { '$ref': '#/components/parameters/PackageName' }
+        - { '$ref': '#/components/parameters/Version' }
       responses:
-        '200':
-          description: Approved release
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Release' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '200': { description: Approved release, content: { application/json: { schema: { '$ref': '#/components/schemas/Release' } } } }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/devices:
     get:
-      summary: List Workspace devices
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      operationId: listWorkspaceDevices
+      summary: List workspace devices
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated device collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DevicePage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '500': { $ref: '#/components/responses/InternalError' }
+        '200': { '$ref': '#/components/responses/DevicePage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
     post:
-      summary: Register a Workspace device
-      description: Requires the developer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: registerWorkspaceDevice
+      summary: Register or replace a device summary
+      description: Requires developer. Device IDs are opaque text and unique only within the workspace. Retries with the same Idempotency-Key and request return the original response without duplicate audit or outbox events.
+      x-agentx-minimum-role: developer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
         content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RegisterDeviceRequest' }
+          application/json: { schema: { '$ref': '#/components/schemas/Device' } }
       responses:
         '201':
-          description: Registered device
+          description: Registered device, or replayed with X-Idempotent-Replay true
           headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
+            X-Idempotent-Replay: { schema: { type: string, enum: ['true'] } }
           content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Device' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+            application/json: { schema: { '$ref': '#/components/schemas/Device' } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
   /v1/workspaces/{id}/devices/{device_id}/heartbeat:
     post:
-      summary: Record a device heartbeat
-      description: Requires the developer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/DeviceID' }
+      operationId: heartbeatWorkspaceDevice
+      summary: Update device and installed-package state
+      description: Requires developer. device_id is workspace-scoped opaque text.
+      x-agentx-minimum-role: developer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/DeviceID' }]
       requestBody:
         required: false
         content:
-          application/json:
-            schema: { $ref: '#/components/schemas/HeartbeatRequest' }
+          application/json: { schema: { '$ref': '#/components/schemas/Device' } }
       responses:
-        '204':
-          description: Heartbeat accepted
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '204': { description: Heartbeat accepted }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/devices/{device_id}/plan:
     get:
-      summary: Build a reconcile plan for a device
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/DeviceID' }
+      operationId: getWorkspaceDevicePlan
+      summary: Get the device reconcile plan
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/DeviceID' }]
       responses:
-        '200':
-          description: Reconcile plan
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ReconcilePlan' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '200': { description: Reconcile plan, content: { application/json: { schema: { '$ref': '#/components/schemas/ReconcilePlan' } } } }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/workspaces/{id}/drift:
     get:
-      summary: List Workspace Drift
-      description: "Requires the viewer role. Extra installed packages have kind `unexpected`."
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      operationId: listWorkspaceDrift
+      summary: Compare devices with the current manifest
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Drift collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DriftPage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '500': { $ref: '#/components/responses/InternalError' }
+        '200': { '$ref': '#/components/responses/DriftPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
   /v1/workspaces/{id}/audit-events:
     get:
-      summary: List Workspace audit events
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      operationId: listWorkspaceAuditEvents
+      summary: List retention-managed audit events
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }, { '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated audit collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AuditPage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '500': { $ref: '#/components/responses/InternalError' }
+        '200': { '$ref': '#/components/responses/AuditPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
   /v1/workspaces/{id}/policies:
     get:
-      summary: Get the current Workspace policy
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: getWorkspacePolicy
+      summary: Get current policy
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }]
       responses:
-        '200':
-          description: Current policy revision
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Policy' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '200': { description: Current policy, content: { application/json: { schema: { '$ref': '#/components/schemas/Policy' } } } }
+        '403': { '$ref': '#/components/responses/Forbidden' }
     put:
-      summary: Replace the Workspace policy
-      description: "Requires the admin role. Accepts either a document object or `{document: {...}}`."
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: updateWorkspacePolicy
+      summary: Replace policy
+      description: Requires admin. Supports require_signature and require_approval.
+      x-agentx-minimum-role: admin
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }]
       requestBody:
         required: true
         content:
-          application/json:
-            schema: { $ref: '#/components/schemas/DocumentRequest' }
+          application/json: { schema: { '$ref': '#/components/schemas/PolicyMutation' } }
       responses:
-        '200':
-          description: Saved policy revision
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Policy' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '200': { description: New policy revision, content: { application/json: { schema: { '$ref': '#/components/schemas/Policy' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
   /v1/workspaces/{id}/manifest:
     get:
-      summary: Get the current Workspace Manifest
-      description: Requires the viewer role.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: getWorkspaceManifest
+      summary: Get current desired-state manifest
+      description: Requires viewer.
+      x-agentx-minimum-role: viewer
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }]
       responses:
-        '200':
-          description: Current Manifest revision
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/TeamManifest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '200': { description: Current manifest, content: { application/json: { schema: { '$ref': '#/components/schemas/TeamManifest' } } } }
+        '403': { '$ref': '#/components/responses/Forbidden' }
     put:
-      summary: Replace the Workspace Manifest
-      description: "Requires the admin role. Accepts either a document object or `{document: {...}}`."
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/WorkspaceID' }
+      operationId: updateWorkspaceManifest
+      summary: Replace desired-state manifest
+      description: Requires admin. Package entries contain name, version, and sha256.
+      x-agentx-minimum-role: admin
+      parameters: [{ '$ref': '#/components/parameters/WorkspaceID' }]
       requestBody:
         required: true
         content:
-          application/json:
-            schema: { $ref: '#/components/schemas/DocumentRequest' }
+          application/json: { schema: { '$ref': '#/components/schemas/TeamManifestMutation' } }
       responses:
-        '200':
-          description: Saved Manifest revision
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/TeamManifest' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-
+        '200': { description: New manifest revision, content: { application/json: { schema: { '$ref': '#/components/schemas/TeamManifest' } } } }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '403': { '$ref': '#/components/responses/Forbidden' }
+  /v1/devices:
+    get:
+      operationId: listLegacyDevices
+      deprecated: true
+      summary: List devices in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
+      responses:
+        '200': { '$ref': '#/components/responses/DevicePage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+    post:
+      operationId: registerLegacyDevice
+      deprecated: true
+      summary: Register a device in local legacy mode
+      description: Disabled in hosted mode.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { '$ref': '#/components/schemas/Device' } }
+      responses:
+        '201': { description: Registered }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+  /v1/devices/{id}/heartbeat:
+    post:
+      operationId: heartbeatLegacyDevice
+      deprecated: true
+      summary: Heartbeat in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '204': { description: Updated }
+        '404': { '$ref': '#/components/responses/NotFound' }
+        '500': { '$ref': '#/components/responses/InternalError' }
   /v1/packages:
     get:
+      operationId: listLegacyReleases
       deprecated: true
-      summary: List unscoped releases (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      summary: List releases in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated release collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ReleasePage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Legacy routes are disabled }
+        '200': { '$ref': '#/components/responses/ReleasePage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '500': { '$ref': '#/components/responses/InternalError' }
   /v1/packages/{name}/releases:
     post:
+      operationId: publishLegacyRelease
       deprecated: true
-      summary: Publish an unscoped release (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`; limited to 51 MiB.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/PackageName' }
+      summary: Publish in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ '$ref': '#/components/parameters/PackageName' }]
       requestBody:
         required: true
         content:
           multipart/form-data:
-            schema: { $ref: '#/components/schemas/PublishReleaseRequest' }
+            schema:
+              type: object
+              required: [version, artifact]
+              properties:
+                version: { type: string }
+                artifact: { type: string, format: binary }
+                signature: { type: string, format: byte }
       responses:
-        '201':
-          description: Release created
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Release' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Legacy routes are disabled }
+        '201': { description: Published }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '500': { '$ref': '#/components/responses/InternalError' }
   /v1/artifacts/{digest}:
     get:
+      operationId: downloadLegacyArtifact
       deprecated: true
-      summary: Download an unscoped artifact (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/Digest' }
+      summary: Download in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ '$ref': '#/components/parameters/Digest' }]
       responses:
-        '200':
-          description: Artifact bytes
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-  /v1/devices:
-    get:
-      deprecated: true
-      summary: List unscoped devices (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
-      responses:
-        '200':
-          description: Paginated device collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DevicePage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Legacy routes are disabled }
-    post:
-      deprecated: true
-      summary: Register an unscoped device (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RegisterDeviceRequest' }
-      responses:
-        '201':
-          description: Registered device
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Device' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Legacy routes are disabled }
-  /v1/devices/{id}/heartbeat:
-    post:
-      deprecated: true
-      summary: Record an unscoped heartbeat (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/LegacyDeviceID' }
-      responses:
-        '204':
-          description: Heartbeat accepted
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-  /v1/drift:
-    get:
-      deprecated: true
-      summary: List unscoped Drift (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
-      responses:
-        '200':
-          description: Drift collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/DriftPage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Legacy routes are disabled }
+        '200': { '$ref': '#/components/responses/Artifact' }
+        '404': { '$ref': '#/components/responses/NotFound' }
   /v1/audit-events:
     get:
+      operationId: listLegacyAuditEvents
       deprecated: true
-      summary: List unscoped audit events (development compatibility route)
-      description: Available only when `AGENTX_ALLOW_LEGACY_UNSCOPED=true`.
-      parameters:
-        - { $ref: '#/components/parameters/RequestID' }
-        - { $ref: '#/components/parameters/Limit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      summary: List audit events in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
       responses:
-        '200':
-          description: Paginated audit collection
-          headers:
-            X-Request-ID: { $ref: '#/components/headers/RequestID' }
-            X-Next-Cursor: { $ref: '#/components/headers/NextCursor' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AuditPage' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Legacy routes are disabled }
-
+        '200': { '$ref': '#/components/responses/AuditPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '500': { '$ref': '#/components/responses/InternalError' }
+  /v1/drift:
+    get:
+      operationId: listLegacyDrift
+      deprecated: true
+      summary: List drift in local legacy mode
+      description: Disabled in hosted mode.
+      parameters: [{ '$ref': '#/components/parameters/Limit' }, { '$ref': '#/components/parameters/Cursor' }]
+      responses:
+        '200': { '$ref': '#/components/responses/DriftPage' }
+        '400': { '$ref': '#/components/responses/BadRequest' }
+        '500': { '$ref': '#/components/responses/InternalError' }
 components:
   securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: API token, JWT, or OIDC access token
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: OIDC JWT }
   parameters:
-    RequestID:
-      name: X-Request-ID
-      in: header
-      required: false
-      description: Caller-supplied correlation ID; the server generates one when omitted.
-      schema: { type: string, maxLength: 255 }
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      description: Reuse only for an identical package, version, signature, and artifact body.
-      schema: { type: string, maxLength: 255 }
-    Limit:
-      name: limit
-      in: query
-      required: false
-      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
-    Cursor:
-      name: cursor
-      in: query
-      required: false
-      schema: { type: string }
-    WorkspaceID:
-      name: id
-      in: path
-      required: true
-      schema: { type: string }
-    UserID:
-      name: user_id
-      in: path
-      required: true
-      schema: { type: string }
-    DeviceID:
-      name: device_id
-      in: path
-      required: true
-      schema: { type: string }
-    LegacyDeviceID:
-      name: id
-      in: path
-      required: true
-      schema: { type: string }
-    PackageName:
-      name: name
-      in: path
-      required: true
-      schema:
-        type: string
-        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
-    Version:
-      name: version
-      in: path
-      required: true
-      schema:
-        type: string
-        pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
-    Digest:
-      name: digest
-      in: path
-      required: true
-      schema:
-        type: string
-        pattern: '^[a-f0-9]{64}$'
-  headers:
-    RequestID:
-      description: Request correlation ID
-      schema: { type: string }
-    NextCursor:
-      description: Cursor for the next page; absent on the last page
-      schema: { type: string }
+    WorkspaceID: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    DeviceID: { name: device_id, in: path, required: true, description: Workspace-scoped opaque text identifier, schema: { type: string, minLength: 1 } }
+    PackageName: { name: name, in: path, required: true, schema: { type: string, minLength: 1 } }
+    Version: { name: version, in: path, required: true, schema: { type: string, minLength: 1 } }
+    Digest: { name: digest, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{64}$' } }
+    Limit: { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+    Cursor: { name: cursor, in: query, required: false, description: Opaque value from next_cursor or X-Next-Cursor, schema: { type: string } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 255 } }
+    InvitationID: { name: invitation_id, in: path, required: true, schema: { type: string, format: uuid } }
+    LegalHoldID: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
-    BadRequest:
-      description: Request validation failed
-      headers:
-        X-Request-ID: { $ref: '#/components/headers/RequestID' }
+    Artifact:
+      description: Immutable gzip tar artifact bytes
+      headers: { Cache-Control: { schema: { type: string } } }
       content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
-    Unauthorized:
-      description: Authentication failed
-      headers:
-        X-Request-ID: { $ref: '#/components/headers/RequestID' }
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
-    Forbidden:
-      description: Workspace role does not authorize this operation
-      headers:
-        X-Request-ID: { $ref: '#/components/headers/RequestID' }
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
-    NotFound:
-      description: Resource not found or unavailable
-      headers:
-        X-Request-ID: { $ref: '#/components/headers/RequestID' }
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
-    InternalError:
-      description: Internal service error
-      headers:
-        X-Request-ID: { $ref: '#/components/headers/RequestID' }
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        application/octet-stream: { schema: { type: string, format: binary } }
+    WorkspacePage: { description: Workspace page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/Workspace' } } } }] } } } }
+    MembershipPage: { description: Membership page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/Membership' } } } }] } } } }
+    InvitationPage: { description: Workspace invitation page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/WorkspaceInvitation' } } } }] } } } }
+    LegalHoldPage: { description: Legal hold page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/LegalHold' } } } }] } } } }
+    ReleasePage: { description: Release page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/Release' } } } }] } } } }
+    DevicePage: { description: Device page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/Device' } } } }] } } } }
+    AuditPage: { description: Audit page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/AuditEvent' } } } }] } } } }
+    DriftPage: { description: Drift page, content: { application/json: { schema: { allOf: [{ '$ref': '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { '$ref': '#/components/schemas/DriftItem' } } } }] } } } }
+    BadRequest: { description: Invalid request, content: { application/json: { schema: { '$ref': '#/components/schemas/ErrorEnvelope' } } } }
+    Unauthorized: { description: Missing or invalid bearer token, content: { application/json: { schema: { '$ref': '#/components/schemas/ErrorEnvelope' } } } }
+    Forbidden: { description: Workspace membership or role denied, content: { application/json: { schema: { '$ref': '#/components/schemas/ErrorEnvelope' } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { '$ref': '#/components/schemas/ErrorEnvelope' } } } }
+    InternalError: { description: Request failed without exposing dependency details, content: { application/json: { schema: { '$ref': '#/components/schemas/ErrorEnvelope' } } } }
+    ServiceUnavailable: { description: Dependency unavailable, content: { application/json: { schema: { '$ref': '#/components/schemas/ErrorEnvelope' } } } }
   schemas:
-    Health:
+    OIDCClientConfig:
       type: object
-      required: [status, service]
+      required: [issuer, client_id, scope]
       properties:
-        status: { type: string, example: ok }
-        service: { type: string, example: agentx-api }
+        issuer: { type: string, format: uri }
+        client_id: { type: string, minLength: 1 }
+        audience: { type: string }
+        scope: { type: string, minLength: 1 }
+    SiteConfig:
+      type: object
+      required: [terms_url, privacy_url, support_url, abuse_email, security_email]
+      properties:
+        terms_url: { type: string, format: uri }
+        privacy_url: { type: string, format: uri }
+        support_url: { type: string, format: uri }
+        abuse_email: { type: string, format: email }
+        security_email: { type: string, format: email }
+    Page:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: {} }
+        count: { type: integer, minimum: 0, description: Total matching items before page slicing }
+        next_cursor: { type: string }
     Principal:
       type: object
       required: [id, subject]
       properties:
         id: { type: string }
+        issuer: { type: string, format: uri }
+        subject: { type: string }
+        email: { type: string, format: email }
+        email_verified: { type: boolean, description: True only when the token carried an explicit boolean true email_verified claim }
+    User:
+      type: object
+      required: [id, issuer, subject, email_verified, created_at]
+      properties:
+        id: { type: string }
         issuer: { type: string }
         subject: { type: string }
         email: { type: string, format: email }
+        email_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
+    AccountMembership:
+      type: object
+      required: [workspace, role, created_at]
+      properties:
+        workspace: { '$ref': '#/components/schemas/Workspace' }
+        role: { '$ref': '#/components/schemas/Role' }
+        created_at: { type: string, format: date-time }
+    AccountAuditEvent:
+      type: object
+      required: [action, at]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        action: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: string }
+        request_id: { type: string }
+        at: { type: string, format: date-time }
+    AccountExport:
+      type: object
+      required: [schema_version, exported_at, user, memberships, invitations, audit_events]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        exported_at: { type: string, format: date-time }
+        user: { '$ref': '#/components/schemas/User' }
+        memberships: { type: array, items: { '$ref': '#/components/schemas/AccountMembership' } }
+        invitations: { type: array, items: { '$ref': '#/components/schemas/WorkspaceInvitation' } }
+        audit_events: { type: array, items: { '$ref': '#/components/schemas/AccountAuditEvent' } }
+    LegalHoldTargetType: { type: string, enum: [account, workspace] }
+    LegalHoldCreate:
+      type: object
+      additionalProperties: false
+      required: [target_type, target_id, reason]
+      properties:
+        target_type: { '$ref': '#/components/schemas/LegalHoldTargetType' }
+        target_id: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    LegalHoldRelease:
+      type: object
+      additionalProperties: false
+      required: [confirmation, reason]
+      properties:
+        confirmation: { type: string, enum: [RELEASE] }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+    LegalHold:
+      type: object
+      required: [id, target_type, target_id, reason, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        target_type: { '$ref': '#/components/schemas/LegalHoldTargetType' }
+        target_id: { type: string }
+        reason: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        released_by: { type: string }
+        released_at: { type: string, format: date-time }
+        release_reason: { type: string }
     Workspace:
       type: object
       required: [id, slug, name, created_at]
       properties:
-        id: { type: string }
+        id: { type: string, format: uuid }
         slug: { type: string }
         name: { type: string }
         created_at: { type: string, format: date-time }
-    CreateWorkspaceRequest:
+    Role: { type: string, enum: [viewer, developer, admin, owner] }
+    AssignableRole: { type: string, enum: [viewer, developer, admin] }
+    InvitationCreate:
       type: object
-      required: [name, slug]
-      additionalProperties: false
+      required: [email, role]
       properties:
-        name: { type: string, minLength: 1, maxLength: 128 }
-        slug: { type: string, minLength: 1, maxLength: 128 }
-    Role:
-      type: string
-      enum: [owner, admin, developer, viewer]
+        email: { type: string, format: email, maxLength: 254 }
+        role: { '$ref': '#/components/schemas/AssignableRole' }
+        expires_in_seconds: { type: integer, format: int64, minimum: 900, maximum: 2592000, default: 604800 }
     Membership:
       type: object
       required: [workspace_id, user_id, role, created_at]
       properties:
-        workspace_id: { type: string }
+        workspace_id: { type: string, format: uuid }
         user_id: { type: string }
-        role: { $ref: '#/components/schemas/Role' }
+        role: { '$ref': '#/components/schemas/Role' }
         created_at: { type: string, format: date-time }
-    AddMemberRequest:
+    WorkspaceInvitation:
       type: object
-      required: [user_id, role]
-      additionalProperties: false
+      required: [id, workspace_id, email, role, created_by, created_at, expires_at, status]
       properties:
-        user_id: { type: string, minLength: 1 }
-        role: { $ref: '#/components/schemas/Role' }
-    UpdateMemberRoleRequest:
-      type: object
-      required: [role]
-      additionalProperties: false
-      properties:
-        role: { $ref: '#/components/schemas/Role' }
-    Device:
-      type: object
-      required: [id, name, agent, status, updated_at]
-      properties:
-        id: { type: string }
-        name: { type: string }
-        agent: { type: string }
-        status: { type: string }
-        updated_at: { type: string, format: date-time }
-        installed_packages:
-          type: object
-          additionalProperties: { type: string }
-    RegisterDeviceRequest:
-      type: object
-      required: [name]
-      properties:
-        id: { type: string }
-        name: { type: string, minLength: 1, maxLength: 128 }
-        agent: { type: string }
-        status: { type: string }
-        installed_packages:
-          type: object
-          additionalProperties: { type: string }
-    HeartbeatRequest:
-      type: object
-      properties:
-        name: { type: string }
-        agent: { type: string }
-        installed_packages:
-          type: object
-          additionalProperties: { type: string }
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        workspace_name: { type: string }
+        workspace_slug: { type: string }
+        email: { type: string, format: email }
+        role: { '$ref': '#/components/schemas/AssignableRole' }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        revoked_by: { type: string }
+        accepted_at: { type: string, format: date-time }
+        accepted_by: { type: string }
+        status: { type: string, enum: [pending, accepted, revoked, expired] }
     Release:
       type: object
       required: [name, version, sha256, size, created_at]
@@ -879,54 +790,21 @@ components:
         sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
         size: { type: integer, format: int64, minimum: 0 }
         created_at: { type: string, format: date-time }
-        signature: { type: string }
-        signature_status: { type: string }
+        signature: { type: string, format: byte }
+        signature_status: { type: string, enum: [verified] }
         status: { type: string, enum: [published, pending_approval, approved] }
-    PublishReleaseRequest:
+    Device:
       type: object
-      required: [version, artifact]
+      required: [name]
       properties:
-        version:
-          type: string
-          pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
-        artifact: { type: string, format: binary }
-        signature:
-          type: string
-          description: Optional Ed25519 signature; required when Workspace policy requires it.
-    Policy:
-      type: object
-      required: [id, workspace_id, revision, document, created_at]
-      properties:
-        id: { type: string }
-        workspace_id: { type: string }
-        revision: { type: integer, format: int64 }
-        document: { type: object, additionalProperties: true }
-        created_at: { type: string, format: date-time }
-    TeamManifest:
-      type: object
-      required: [id, workspace_id, revision, document, created_at]
-      properties:
-        id: { type: string }
-        workspace_id: { type: string }
-        revision: { type: integer, format: int64 }
-        document: { type: object, additionalProperties: true }
-        created_at: { type: string, format: date-time }
-    DocumentRequest:
-      type: object
-      minProperties: 1
-      additionalProperties: true
-      properties:
-        document: { type: object, additionalProperties: true }
-    DriftItem:
-      type: object
-      required: [device_id, device_name, package, kind]
-      properties:
-        device_id: { type: string }
-        device_name: { type: string }
-        package: { type: string }
-        expected_sha256: { type: string }
-        observed_sha256: { type: string }
-        kind: { type: string, enum: [missing, changed, unexpected] }
+        id: { type: string, description: Workspace-scoped opaque text; generated when omitted }
+        name: { type: string, minLength: 1 }
+        agent: { type: string }
+        status: { type: string }
+        updated_at: { type: string, format: date-time, readOnly: true }
+        installed_packages:
+          type: object
+          additionalProperties: { type: string, pattern: '^[a-f0-9]{64}$' }
     AuditEvent:
       type: object
       required: [action, at]
@@ -939,73 +817,91 @@ components:
         metadata: { type: object, additionalProperties: true }
         request_id: { type: string }
         at: { type: string, format: date-time }
-    ReconcileAction:
+    DriftItem:
       type: object
-      required: [package, kind, to]
+      required: [device_name, package, kind, expected_sha256]
       properties:
+        device_id: { type: string }
+        device_name: { type: string }
         package: { type: string }
-        kind: { type: string, enum: [install, update, remove] }
-        from: { type: string }
-        to: { type: string }
+        kind: { type: string, enum: [missing, changed, extra] }
+        expected_sha256: { type: string }
+        observed_sha256: { type: string }
+    PolicyDocument:
+      type: object
+      additionalProperties: false
+      properties:
+        require_signature: { type: boolean }
+        require_approval: { type: boolean }
+    PolicyMutation:
+      oneOf:
+        - { '$ref': '#/components/schemas/PolicyDocument' }
+        - type: object
+          additionalProperties: false
+          required: [document]
+          properties:
+            document: { '$ref': '#/components/schemas/PolicyDocument' }
+    Policy:
+      type: object
+      required: [id, workspace_id, revision, document, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        revision: { type: integer, format: int64 }
+        document: { '$ref': '#/components/schemas/PolicyDocument' }
+        created_at: { type: string, format: date-time }
+    TeamManifest:
+      type: object
+      required: [id, workspace_id, revision, document, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        revision: { type: integer, format: int64 }
+        document: { '$ref': '#/components/schemas/DesiredManifestDocument' }
+        created_at: { type: string, format: date-time }
+    DesiredPackage:
+      type: object
+      additionalProperties: false
+      required: [name, version, sha256]
+      properties:
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' }
+        version: { type: string, pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+    DesiredManifestDocument:
+      type: object
+      additionalProperties: false
+      required: [version, packages]
+      properties:
+        version: { type: integer, enum: [1] }
+        packages:
+          type: array
+          items: { '$ref': '#/components/schemas/DesiredPackage' }
+    TeamManifestMutation:
+      oneOf:
+        - { '$ref': '#/components/schemas/DesiredManifestDocument' }
+        - type: object
+          additionalProperties: false
+          required: [document]
+          properties:
+            document: { '$ref': '#/components/schemas/DesiredManifestDocument' }
     ReconcilePlan:
       type: object
       required: [device_id, workspace_id, manifest_revision, actions, generated_at]
       properties:
         device_id: { type: string }
-        workspace_id: { type: string }
+        workspace_id: { type: string, format: uuid }
         manifest_revision: { type: integer, format: int64 }
         actions:
           type: array
-          items: { $ref: '#/components/schemas/ReconcileAction' }
+          items:
+            type: object
+            required: [package, kind, to]
+            properties:
+              package: { type: string }
+              kind: { type: string, enum: [install, update, remove] }
+              from: { type: string }
+              to: { type: string }
         generated_at: { type: string, format: date-time }
-    WorkspacePage:
-      allOf:
-        - { $ref: '#/components/schemas/PageMetadata' }
-        - type: object
-          required: [items]
-          properties:
-            items: { type: array, items: { $ref: '#/components/schemas/Workspace' } }
-    MembershipPage:
-      allOf:
-        - { $ref: '#/components/schemas/PageMetadata' }
-        - type: object
-          required: [items]
-          properties:
-            items: { type: array, items: { $ref: '#/components/schemas/Membership' } }
-    DevicePage:
-      allOf:
-        - { $ref: '#/components/schemas/PageMetadata' }
-        - type: object
-          required: [items]
-          properties:
-            items: { type: array, items: { $ref: '#/components/schemas/Device' } }
-    ReleasePage:
-      allOf:
-        - { $ref: '#/components/schemas/PageMetadata' }
-        - type: object
-          required: [items]
-          properties:
-            items: { type: array, items: { $ref: '#/components/schemas/Release' } }
-    AuditPage:
-      allOf:
-        - { $ref: '#/components/schemas/PageMetadata' }
-        - type: object
-          required: [items]
-          properties:
-            items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
-    DriftPage:
-      allOf:
-        - { $ref: '#/components/schemas/PageMetadata' }
-        - type: object
-          required: [items]
-          properties:
-            items: { type: array, items: { $ref: '#/components/schemas/DriftItem' } }
-    PageMetadata:
-      type: object
-      required: [count]
-      properties:
-        count: { type: integer, minimum: 0 }
-        next_cursor: { type: string }
     ErrorEnvelope:
       type: object
       required: [error]
@@ -1016,4 +912,4 @@ components:
           properties:
             code: { type: string }
             message: { type: string }
-            request_id: { type: string }
+            request_id: { type: string, minLength: 1 }

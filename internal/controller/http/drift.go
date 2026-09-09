@@ -13,7 +13,7 @@ func registerDriftRoutes(r *gin.Engine, s *drift.Service, ws *workspace.Service,
 		r.GET("/v1/drift", func(c *gin.Context) {
 			v, err := s.List(c)
 			if err != nil {
-				c.JSON(500, errorEnvelope(c, "DRIFT_FAILED", err.Error()))
+				writeServiceError(c, "DRIFT_FAILED", err)
 				return
 			}
 			writeDriftCollection(c, v)
@@ -22,12 +22,12 @@ func registerDriftRoutes(r *gin.Engine, s *drift.Service, ws *workspace.Service,
 	if ws != nil {
 		r.GET("/v1/workspaces/:id/drift", func(c *gin.Context) {
 			if err := ws.Authorize(c, c.Param("id"), entity.RoleViewer); err != nil {
-				c.JSON(http.StatusForbidden, errorEnvelope(c, "WORKSPACE_ACCESS_DENIED", err.Error()))
+				writeServiceError(c, "WORKSPACE_ACCESS_DENIED", err)
 				return
 			}
 			v, err := s.ListForWorkspace(c, c.Param("id"))
 			if err != nil {
-				c.JSON(500, errorEnvelope(c, "DRIFT_FAILED", err.Error()))
+				writeServiceError(c, "DRIFT_FAILED", err)
 				return
 			}
 			writeDriftCollection(c, v)

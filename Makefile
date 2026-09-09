@@ -1,13 +1,12 @@
-.PHONY: test build migrate
+.PHONY: test build migrate production-preflight
 test:
-	cargo fmt --manifest-path cli/Cargo.toml --check
-	cargo test --manifest-path cli/Cargo.toml
-	cd server && go test ./...
-	cd server && go vet ./...
-	cd web && npm run build
+	go test ./...
+	go vet ./...
 migrate:
-	cd server && go run ./cmd/migrate
+	go run ./cmd/migrate
 build:
-	cargo build --release --manifest-path cli/Cargo.toml
-	cd server && go build ./cmd/app
-	cd web && npm run build
+	go build ./cmd/app
+	go build ./cmd/migrate
+	go build ./cmd/production-preflight
+production-preflight:
+	go run ./cmd/production-preflight -kustomize-dir "$${KUSTOMIZE_DIR:-deploy/kubernetes}"

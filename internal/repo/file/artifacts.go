@@ -54,7 +54,7 @@ func (s *ArtifactStore) Put(_ context.Context, name string, src io.Reader) (enti
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return entity.Release{}, fmt.Errorf("artifact path is not a regular file")
 		}
-		return entity.Release{SHA256: digest, Size: info.Size()}, nil
+		return entity.Release{Name: name, SHA256: digest, Size: info.Size()}, nil
 	} else if !os.IsNotExist(err) {
 		return entity.Release{}, err
 	}

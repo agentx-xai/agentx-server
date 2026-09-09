@@ -26,7 +26,7 @@ AgentX Server 是 Registry/API 服务，为 AI Agent 环境提供团队级的版
 
 ## 本地运行
 
-要求 Go 1.24+。单节点默认使用文件存储：
+要求 Go 1.25+。单节点默认使用文件存储：
 
 ```bash
 cp .env.example .env
@@ -89,6 +89,8 @@ agentx team pull --output agentx.yaml
 ## Staging
 
 Staging Compose 会启动 PostgreSQL、MinIO、Dex OIDC、API 和控制台：
+
+请将 `agentx-server`、`agentx-cli` 和 `agentx-website` 克隆到同一父目录；Compose 会从相邻的 `agentx-website/console` 构建控制台，验收脚本默认使用相邻的 CLI 构建。
 
 ```bash
 docker compose -f docker-compose.staging.yml up -d --build

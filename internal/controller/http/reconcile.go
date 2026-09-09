@@ -14,12 +14,12 @@ func registerReconcileRoutes(r *gin.Engine, s *reconcile.Service, ws *workspace.
 	}
 	r.GET("/v1/workspaces/:id/devices/:device_id/plan", func(c *gin.Context) {
 		if err := ws.Authorize(c, c.Param("id"), entity.RoleViewer); err != nil {
-			c.JSON(http.StatusForbidden, errorEnvelope(c, "WORKSPACE_ACCESS_DENIED", err.Error()))
+			writeServiceError(c, "WORKSPACE_ACCESS_DENIED", err)
 			return
 		}
 		plan, err := s.Plan(c, c.Param("id"), c.Param("device_id"))
 		if err != nil {
-			c.JSON(http.StatusNotFound, errorEnvelope(c, "RECONCILE_PLAN_FAILED", err.Error()))
+			writeServiceError(c, "RECONCILE_PLAN_FAILED", err)
 			return
 		}
 		c.JSON(http.StatusOK, plan)

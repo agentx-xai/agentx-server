@@ -1,0 +1,64 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agentx-api
+  labels: { release: kube-prometheus-stack }
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: agentx-api }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agentx
+  labels: { release: kube-prometheus-stack }
+spec:
+  groups:
+    - name: agentx.availability
+      rules:
+        - alert: AgentXAPIDown
+          expr: sum(up{namespace="agentx",service="agentx-api"}) < 1
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: AgentX API has no healthy scrape targets
+            runbook_url: https://console.agentx.example.com/runbooks/operations
+        - alert: AgentXDeploymentUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="agentx",deployment=~"agentx-(api|web)"} < 1
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: AgentX deployment has no available replicas
+            runbook_url: https://console.agentx.example.com/runbooks/operations
+        - alert: AgentXHTTPFailureRatioHigh
+          expr: sum(rate(agentx_http_request_failures_total[5m])) / clamp_min(sum(rate(agentx_http_requests_total[5m])), 0.001) > 0.05
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: AgentX HTTP 5xx ratio exceeds 5 percent
+            runbook_url: https://console.agentx.example.com/runbooks/operations
+        - alert: AgentXHTTPConcurrencyHigh
+          expr: sum(agentx_http_in_flight) > 100
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: AgentX API has sustained high request concurrency
+            runbook_url: https://console.agentx.example.com/runbooks/operations
+        - alert: AgentXWorkerCycleFailures
+          expr: sum(increase(agentx_worker_run_failures_total[10m])) > 3
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: AgentX outbox worker repeatedly cannot persist delivery state
+            runbook_url: https://console.agentx.example.com/runbooks/operations
+        - alert: AgentXOutboxDeadLetters
+          expr: sum(increase(agentx_worker_dead_letters_total[15m])) > 0
+          labels: { severity: critical }
+          annotations:
+            summary: AgentX moved one or more outbox events to the dead letter queue
+            runbook_url: https://console.agentx.example.com/runbooks/operations

@@ -1,20 +1,32 @@
-issuer: http://dex:5556/dex
+issuer: http://localhost:5556/dex
 storage:
   type: sqlite3
   config:
     file: /tmp/dex.db
 web:
   http: 0.0.0.0:5556
+  allowedOrigins: ["http://localhost:5178"]
 oauth2:
   skipApprovalScreen: true
 staticClients:
 - id: agentx
   name: AgentX staging
-  secret: agentx-staging-client-secret
-  redirectURIs: ["http://localhost:5178/"]
+  public: true
+  redirectURIs: ["http://localhost:5178/", "/device/callback"]
 enablePasswordDB: true
 staticPasswords:
 - email: admin@example.com
-  hash: "$2a$10$7EqJtq98hPqEX7fNZaFWoOe6QhL6f0f7x6Q9x3Q2iX6f9r3n1mW9K"
+  # Password: agentx-staging-password. Never reuse this staging credential.
+  hash: "$2a$10$Mbp.XGGZF6DtS7CIvxi7seysRdRDp2LOPzUcgMQtWcc/3nbepj4f2"
   username: admin
   userID: 00000000-0000-0000-0000-000000000001
+- email: invitee@example.com
+  # Password: agentx-staging-password. Never reuse this staging credential.
+  hash: "$2a$10$Mbp.XGGZF6DtS7CIvxi7seysRdRDp2LOPzUcgMQtWcc/3nbepj4f2"
+  username: invitee
+  userID: 00000000-0000-0000-0000-000000000002
+- email: account@example.com
+  # Password: agentx-staging-password. Never reuse this staging credential.
+  hash: "$2a$10$Mbp.XGGZF6DtS7CIvxi7seysRdRDp2LOPzUcgMQtWcc/3nbepj4f2"
+  username: account
+  userID: 00000000-0000-0000-0000-000000000003

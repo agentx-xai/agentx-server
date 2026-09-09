@@ -25,14 +25,19 @@ services:
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     ports: ["5556:5556"]
     volumes: ["./staging/dex-config.yaml:/etc/dex/config.yaml:ro"]
+  mailpit:
+    image: axllent/mailpit:v1.27.8@sha256:6abc8e633df15eaf785cfcf38bae48e66f64beecdc03121e249d0f9ec15f0707
+    ports: ["18025:8025"]
   api:
-    build: ./server
+    build: .
     depends_on:
       postgres: {condition: service_healthy}
       minio: {condition: service_started}
       migrate: {condition: service_completed_successfully}
+      mailpit: {condition: service_started}
     ports: ["8081:8080"]
     environment:
+      AGENTX_DEPLOYMENT_MODE: hosted
       AGENTX_HTTP_ADDR: :8080
       AGENTX_DATABASE_URL: postgres://agentx:agentx-staging@postgres:5432/agentx?sslmode=disable
       AGENTX_ARTIFACT_STORE: s3
@@ -41,25 +46,52 @@ services:
       AGENTX_S3_SECRET_KEY: agentx-staging-secret
       AGENTX_S3_BUCKET: agentx-artifacts
       AGENTX_S3_SECURE: "false"
-      AGENTX_OIDC_ISSUER: http://dex:5556/dex
+      AGENTX_OIDC_ISSUER: http://localhost:5556/dex
+      AGENTX_OIDC_BACKCHANNEL_URL: http://dex:5556/dex
       AGENTX_JWT_AUDIENCE: agentx
-      AGENTX_API_TOKEN: agentx-staging-bootstrap-token
+      AGENTX_OIDC_CLI_CLIENT_ID: agentx
+      AGENTX_OIDC_CLI_SCOPE: openid profile email offline_access
+      AGENTX_API_TOKEN: agentx-staging-bootstrap-token-change-me-now
+      AGENTX_ALLOW_HOSTED_BOOTSTRAP_AUTH: "true"
+      AGENTX_ALLOW_INSECURE_HOSTED: "true"
       AGENTX_RATE_LIMIT_PER_MINUTE: "1200"
+      AGENTX_ALLOWED_ORIGINS: http://localhost:5178
+      AGENTX_ALLOW_LEGACY_UNSCOPED: "false"
+      AGENTX_TERMS_URL: http://localhost:5178/terms-staging-placeholder
+      AGENTX_PRIVACY_URL: http://localhost:5178/privacy-staging-placeholder
+      AGENTX_SUPPORT_URL: http://localhost:5178/support-staging-placeholder
+      AGENTX_ABUSE_EMAIL: abuse-staging@example.invalid
+      AGENTX_SECURITY_EMAIL: security-staging@example.invalid
+      AGENTX_CONSOLE_URL: http://localhost:5178
+      AGENTX_SMTP_ADDRESS: mailpit:1025
+      AGENTX_SMTP_FROM: notifications-staging@example.invalid
+      AGENTX_SMTP_TLS_MODE: plain
+      AGENTX_COMPLIANCE_ADMIN_IDS: http://localhost:5556/dex|CiQwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDESBWxvY2Fs
+      AGENTX_AUDIT_RETENTION_DAYS: "30"
+      AGENTX_AUDIT_RETENTION_INTERVAL: 1h
   migrate:
-    build: ./server
+    build: .
     depends_on:
       postgres: {condition: service_healthy}
     entrypoint: ["/app/agentx-migrate"]
     environment:
       AGENTX_DATABASE_URL: postgres://agentx:agentx-staging@postgres:5432/agentx?sslmode=disable
   web:
-    image: node:22-alpine
-    working_dir: /app
-    volumes: ["./web:/app", "staging-web-node-modules:/app/node_modules"]
-    environment: ["VITE_API_URL=http://localhost:8081"]
-    command: ["sh", "-c", "npm ci && npm run dev -- --host 0.0.0.0"]
-    ports: ["5178:5173"]
+    build:
+      context: ../agentx-website/console
+      args:
+        VITE_API_URL: ""
+        VITE_DEPLOYMENT_MODE: hosted
+        VITE_OIDC_ISSUER: http://localhost:5556/dex
+        VITE_OIDC_CLIENT_ID: agentx
+        VITE_OIDC_REDIRECT_URI: http://localhost:5178/
+    depends_on:
+      api: {condition: service_started}
+      dex: {condition: service_started}
+    environment:
+      AGENTX_API_UPSTREAM: http://api:8080
+      AGENTX_CSP_CONNECT_SRC: "'self' http://localhost:5556"
+    ports: ["5178:8080"]
 volumes:
   staging-pg:
   staging-minio:
-  staging-web-node-modules:

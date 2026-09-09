@@ -30,7 +30,7 @@ func TestManifestLifecycle(t *testing.T) {
 	}
 	workspaceID := workspace.ID
 	update := httptest.NewRecorder()
-	router.ServeHTTP(update, httptest.NewRequest(http.MethodPut, "/v1/workspaces/"+workspaceID+"/manifest", bytes.NewBufferString(`{"document":{"packages":[{"name":"demo","sha256":"abc"}]}}`)))
+	router.ServeHTTP(update, httptest.NewRequest(http.MethodPut, "/v1/workspaces/"+workspaceID+"/manifest", bytes.NewBufferString(`{"document":{"version":1,"packages":[{"name":"demo","version":"1.0.0","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}`)))
 	if update.Code != http.StatusOK || !bytes.Contains(update.Body.Bytes(), []byte(`"revision":1`)) {
 		t.Fatalf("update manifest: %d %s", update.Code, update.Body.String())
 	}

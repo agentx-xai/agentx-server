@@ -14,6 +14,6 @@ func registerMeRoute(r *gin.Engine) {
 			c.JSON(http.StatusOK, gin.H{"id": "anonymous", "subject": "anonymous"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"id": principal.UserID, "issuer": principal.Issuer, "subject": principal.Subject, "email": principal.Email})
+		c.JSON(http.StatusOK, gin.H{"id": principal.UserID, "issuer": principal.Issuer, "subject": principal.Subject, "email": principal.Email, "email_verified": principal.EmailVerified})
 	})
 }

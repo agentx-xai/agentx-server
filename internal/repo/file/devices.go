@@ -8,9 +8,7 @@ import (
 	"path/filepath"
 )
 
-type DeviceRepo struct {
-	path string
-}
+type DeviceRepo struct{ path string }
 
 type storedDevice struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
@@ -21,8 +19,6 @@ func NewDeviceRepo(dir string) *DeviceRepo {
 	return &DeviceRepo{path: filepath.Join(dir, "devices.json")}
 }
 func (r *DeviceRepo) List(_ context.Context) ([]entity.Device, error) {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return nil, err
@@ -34,8 +30,6 @@ func (r *DeviceRepo) List(_ context.Context) ([]entity.Device, error) {
 	return out, nil
 }
 func (r *DeviceRepo) Save(ctx context.Context, d entity.Device) error {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err
@@ -49,8 +43,6 @@ func (r *DeviceRepo) Save(ctx context.Context, d entity.Device) error {
 	return r.save(append(stored, storedDevice{Device: d}))
 }
 func (r *DeviceRepo) ListForWorkspace(_ context.Context, workspaceID string) ([]entity.Device, error) {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return nil, err
@@ -64,8 +56,6 @@ func (r *DeviceRepo) ListForWorkspace(_ context.Context, workspaceID string) ([]
 	return out, nil
 }
 func (r *DeviceRepo) SaveForWorkspace(_ context.Context, workspaceID string, d entity.Device) error {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err
@@ -79,8 +69,6 @@ func (r *DeviceRepo) SaveForWorkspace(_ context.Context, workspaceID string, d e
 	return r.save(append(stored, storedDevice{WorkspaceID: workspaceID, Device: d}))
 }
 func (r *DeviceRepo) HeartbeatForWorkspace(_ context.Context, workspaceID, deviceID string, d entity.Device) error {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err
@@ -124,9 +112,7 @@ func (r *DeviceRepo) save(stored []storedDevice) error {
 	return os.Rename(tmp, r.path)
 }
 
-type AuditRepo struct {
-	path string
-}
+type AuditRepo struct{ path string }
 
 type storedAuditEvent struct {
 	WorkspaceID string `json:"workspace_id,omitempty"`
@@ -135,8 +121,6 @@ type storedAuditEvent struct {
 
 func NewAuditRepo(dir string) *AuditRepo { return &AuditRepo{path: filepath.Join(dir, "audit.json")} }
 func (r *AuditRepo) List(_ context.Context) ([]entity.AuditEvent, error) {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return nil, err
@@ -148,8 +132,6 @@ func (r *AuditRepo) List(_ context.Context) ([]entity.AuditEvent, error) {
 	return out, nil
 }
 func (r *AuditRepo) Append(ctx context.Context, e entity.AuditEvent) error {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err
@@ -157,8 +139,6 @@ func (r *AuditRepo) Append(ctx context.Context, e entity.AuditEvent) error {
 	return r.save(append(stored, storedAuditEvent{AuditEvent: e}))
 }
 func (r *AuditRepo) ListForWorkspace(_ context.Context, workspaceID string) ([]entity.AuditEvent, error) {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return nil, err
@@ -172,8 +152,6 @@ func (r *AuditRepo) ListForWorkspace(_ context.Context, workspaceID string) ([]e
 	return out, nil
 }
 func (r *AuditRepo) AppendForWorkspace(_ context.Context, workspaceID string, e entity.AuditEvent) error {
-	dataMu.Lock()
-	defer dataMu.Unlock()
 	stored, err := r.load()
 	if err != nil {
 		return err

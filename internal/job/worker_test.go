@@ -3,9 +3,12 @@ package job
 import (
 	"agentx/server/internal/entity"
 	"agentx/server/internal/repo/file"
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,7 +51,8 @@ func TestWorkerDeadLettersAfterMaximumAttempts(t *testing.T) {
 	if err := outbox.Enqueue(context.Background(), entity.OutboxEvent{ID: "dead-1", Topic: "broken", Payload: map[string]any{}, AvailableAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	worker := Worker{Outbox: outbox, MaxAttempts: 1, Handler: func(context.Context, string, map[string]any) error { return errors.New("permanent failure") }}
+	metrics := &Metrics{}
+	worker := Worker{Outbox: outbox, Metrics: metrics, MaxAttempts: 1, Handler: func(context.Context, string, map[string]any) error { return errors.New("permanent failure") }}
 	if err := worker.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -58,5 +62,42 @@ func TestWorkerDeadLettersAfterMaximumAttempts(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("dead-letter event was claimable: %+v", items)
+	}
+	snapshot := metrics.Snapshot()
+	if snapshot.HandlerFailures != 1 || snapshot.DeadLetters != 1 {
+		t.Fatalf("unexpected worker metrics: %+v", snapshot)
+	}
+}
+
+type failingClaimOutbox struct {
+	err    error
+	cancel context.CancelFunc
+}
+
+func (o failingClaimOutbox) Enqueue(context.Context, entity.OutboxEvent) error { return nil }
+func (o failingClaimOutbox) Claim(context.Context, int) ([]entity.OutboxEvent, error) {
+	o.cancel()
+	return nil, o.err
+}
+func (o failingClaimOutbox) MarkProcessed(context.Context, string) error          { return nil }
+func (o failingClaimOutbox) MarkFailed(context.Context, string, time.Time) error  { return nil }
+func (o failingClaimOutbox) MarkDeadLetter(context.Context, string, string) error { return nil }
+
+func TestWorkerRunLogsAndCountsCycleFailures(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var output bytes.Buffer
+	metrics := &Metrics{}
+	worker := Worker{
+		Outbox:  failingClaimOutbox{err: errors.New("database unavailable"), cancel: cancel},
+		Logger:  slog.New(slog.NewTextHandler(&output, nil)),
+		Metrics: metrics,
+	}
+	worker.Run(ctx, time.Hour)
+	if !strings.Contains(output.String(), "outbox worker cycle failed") || !strings.Contains(output.String(), "database unavailable") {
+		t.Fatalf("worker failure was not logged: %s", output.String())
+	}
+	snapshot := metrics.Snapshot()
+	if snapshot.RunFailures != 1 || snapshot.RepositoryFailures != 1 {
+		t.Fatalf("unexpected worker metrics: %+v", snapshot)
 	}
 }

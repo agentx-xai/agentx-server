@@ -1,10 +1,12 @@
 package reconcile
 
 import (
+	"agentx/server/internal/apperror"
 	"agentx/server/internal/entity"
 	"agentx/server/internal/repo"
 	"context"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -25,12 +27,11 @@ func (s *Service) Plan(ctx context.Context, workspaceID, deviceID string) (entit
 	if err != nil {
 		return entity.ReconcilePlan{}, err
 	}
-	var devices []entity.Device
-	if r, ok := s.devices.(repo.WorkspaceDeviceRepository); ok {
-		devices, err = r.ListForWorkspace(ctx, workspaceID)
-	} else {
-		return entity.ReconcilePlan{}, fmt.Errorf("workspace device repository is unavailable")
+	deviceRepo, ok := s.devices.(repo.WorkspaceDeviceRepository)
+	if !ok {
+		return entity.ReconcilePlan{}, fmt.Errorf("workspace device persistence is unavailable")
 	}
+	devices, err := deviceRepo.ListForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return entity.ReconcilePlan{}, err
 	}
@@ -42,9 +43,12 @@ func (s *Service) Plan(ctx context.Context, workspaceID, deviceID string) (entit
 		}
 	}
 	if device.ID == "" {
-		return entity.ReconcilePlan{}, fmt.Errorf("device not found")
+		return entity.ReconcilePlan{}, apperror.New(apperror.KindNotFound, "device not found")
 	}
-	desired := desiredPackages(manifest.Document)
+	desired, err := entity.ParseDesiredManifest(manifest.Document)
+	if err != nil {
+		return entity.ReconcilePlan{}, fmt.Errorf("stored manifest is invalid: %w", err)
+	}
 	actions := make([]entity.ReconcileAction, 0)
 	for _, item := range desired {
 		observed := ""
@@ -66,30 +70,15 @@ func (s *Service) Plan(ctx context.Context, workspaceID, deviceID string) (entit
 			actions = append(actions, entity.ReconcileAction{Package: name, Kind: "remove", From: observed})
 		}
 	}
+	sort.Slice(actions, func(i, j int) bool {
+		if actions[i].Package == actions[j].Package {
+			return actions[i].Kind < actions[j].Kind
+		}
+		return actions[i].Package < actions[j].Package
+	})
 	return entity.ReconcilePlan{DeviceID: deviceID, Workspace: workspaceID, Revision: manifest.Revision, Actions: actions, Generated: time.Now().UTC()}, nil
 }
 
-func Desired(document map[string]any) []entity.DesiredPackage { return desiredPackages(document) }
-
-func desiredPackages(document map[string]any) []entity.DesiredPackage {
-	var out []entity.DesiredPackage
-	for _, key := range []string{"packages", "skills"} {
-		entries, ok := document[key].([]any)
-		if !ok {
-			continue
-		}
-		for _, raw := range entries {
-			item, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _ := item["name"].(string)
-			digest, _ := item["sha256"].(string)
-			version, _ := item["version"].(string)
-			if name != "" && digest != "" {
-				out = append(out, entity.DesiredPackage{Name: name, Version: version, SHA256: digest})
-			}
-		}
-	}
-	return out
+func Desired(document map[string]any) ([]entity.DesiredPackage, error) {
+	return entity.ParseDesiredManifest(document)
 }

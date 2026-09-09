@@ -6,7 +6,7 @@ AgentX Server is the Registry/API for team-scoped Agent environments. It stores 
 
 ## Run locally
 
-Go 1.24 or newer is required. The default file backend is suitable for development:
+Go 1.25 or newer is required. The default file backend is suitable for development:
 
 ```bash
 cp .env.example .env
@@ -39,6 +39,15 @@ The policy document can require verified Ed25519 signatures and administrator ap
 
 The outbox worker retries event delivery and moves events beyond the retry limit to a dead-letter state with the final error. Audit writes are append-only. Artifact downloads verify content-addressed SHA-256 before serving file-backed objects.
 
+## Staging
+
+Clone `agentx-server`, `agentx-cli`, and `agentx-website` into the same parent directory. The staging Compose stack builds the console from the adjacent `agentx-website/console` checkout, and the acceptance script uses the adjacent CLI build by default.
+
+```bash
+docker compose -f docker-compose.staging.yml up -d --build
+AGENTX_TOKEN=... AGENTX_WORKSPACE_ID=... ./scripts/staging-acceptance.sh
+```
+
 ## Verification and release
 
 ```bash
@@ -47,6 +56,7 @@ go test ./...
 go vet ./...
 go build ./cmd/app
 go build ./cmd/migrate
+go build ./cmd/production-preflight
 ```
 
 Push a tag matching `vMAJOR.MINOR.PATCH` to run the tag workflow. The release workflow builds Server and Migrate binaries, packages OpenAPI and migrations, and publishes `SHA256SUMS`. Verify downloads with `sha256sum -c SHA256SUMS`. See [`PRODUCT.en.md`](PRODUCT.en.md) and [`SECURITY.md`](SECURITY.md) for the full operating model.

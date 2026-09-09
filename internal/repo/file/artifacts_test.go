@@ -25,6 +25,20 @@ func TestArtifactStoreRoundTrip(t *testing.T) {
 		t.Fatalf("got %q err %v", b, e)
 	}
 }
+
+func TestArtifactStoreDeduplicationPreservesRequestedName(t *testing.T) {
+	s := NewArtifactStore(t.TempDir())
+	if _, err := s.Put(context.Background(), "first", strings.NewReader("shared")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Put(context.Background(), "second", strings.NewReader("shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Name != "second" {
+		t.Fatalf("deduplicated artifact lost package name: %+v", second)
+	}
+}
 func TestArtifactStoreRejectsTraversal(t *testing.T) {
 	s := NewArtifactStore(t.TempDir())
 	if _, e := s.Open(context.Background(), "../secret"); e == nil {

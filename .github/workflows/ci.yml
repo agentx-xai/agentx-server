@@ -22,10 +22,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
       - run: go test ./...
         env:
           AGENTX_POSTGRES_TEST_URL: postgres://agentx:agentx@localhost:5432/agentx_test?sslmode=disable
       - run: go vet ./...
       - run: go build ./cmd/app
       - run: go build ./cmd/migrate
+      - run: go build ./cmd/production-preflight
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate OpenAPI contract
+        run: npx --yes @redocly/cli@1.34.5 lint openapi.yaml
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+      - name: Render Kubernetes baseline
+        run: kubectl kustomize deploy/kubernetes >/dev/null

@@ -11,7 +11,7 @@ func registerManifestRoutes(r *gin.Engine, s *manifest.Service) {
 	r.GET("/v1/workspaces/:id/manifest", func(c *gin.Context) {
 		current, err := s.Current(c, c.Param("id"))
 		if err != nil {
-			c.JSON(http.StatusForbidden, errorEnvelope(c, "MANIFEST_READ_DENIED", err.Error()))
+			writeServiceError(c, "MANIFEST_READ_DENIED", err)
 			return
 		}
 		c.JSON(http.StatusOK, current)
@@ -28,11 +28,7 @@ func registerManifestRoutes(r *gin.Engine, s *manifest.Service) {
 		}
 		current, err := s.Replace(c, c.Param("id"), document)
 		if err != nil {
-			status := http.StatusForbidden
-			if err.Error() == "manifest document is required" {
-				status = http.StatusBadRequest
-			}
-			c.JSON(status, errorEnvelope(c, "MANIFEST_UPDATE_FAILED", err.Error()))
+			writeServiceError(c, "MANIFEST_UPDATE_FAILED", err)
 			return
 		}
 		c.JSON(http.StatusOK, current)

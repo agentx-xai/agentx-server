@@ -3,16 +3,15 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"strings"
-	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type Principal struct{ UserID, Issuer, Subject, Email string }
+type Principal struct {
+	UserID, Issuer, Subject, Email string
+	EmailVerified                  bool
+}
 type contextKey struct{}
 type requestIDKey struct{}
 
@@ -66,24 +65,6 @@ func VerifyBearer(raw, apiToken, jwtSecret, issuer, audience string) (Principal,
 	}
 	iss, _ := claims["iss"].(string)
 	email, _ := claims["email"].(string)
-	return Principal{UserID: iss + "|" + sub, Issuer: iss, Subject: sub, Email: email}, nil
-}
-
-func ParseUnsignedClaims(raw string) (map[string]any, error) {
-	parts := strings.Split(raw, ".")
-	if len(parts) != 3 {
-		return nil, errors.New("invalid jwt")
-	}
-	b, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, err
-	}
-	var c map[string]any
-	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, err
-	}
-	if exp, ok := c["exp"].(float64); ok && time.Now().Unix() >= int64(exp) {
-		return nil, errors.New("token expired")
-	}
-	return c, nil
+	emailVerified, _ := claims["email_verified"].(bool)
+	return Principal{UserID: iss + "|" + sub, Issuer: iss, Subject: sub, Email: email, EmailVerified: emailVerified}, nil
 }

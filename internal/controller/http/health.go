@@ -1,6 +1,7 @@
 package http
 
 import (
+	"agentx/server/internal/auth"
 	"context"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -11,7 +12,8 @@ func registerHealth(r *gin.Engine, ready ...func(context.Context) error) {
 	r.GET("/readyz", func(c *gin.Context) {
 		if len(ready) > 0 && ready[0] != nil {
 			if err := ready[0](c); err != nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": err.Error()})
+				requestLogger(c).ErrorContext(c.Request.Context(), "readiness check failed", "request_id", auth.RequestID(c.Request.Context()), "error", err)
+				c.JSON(http.StatusServiceUnavailable, errorEnvelope(c, "NOT_READY", "dependency unavailable"))
 				return
 			}
 		}

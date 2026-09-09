@@ -12,11 +12,12 @@ const (
 )
 
 type User struct {
-	ID        string    `json:"id"`
-	Issuer    string    `json:"issuer"`
-	Subject   string    `json:"subject"`
-	Email     string    `json:"email,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	Issuer        string    `json:"issuer"`
+	Subject       string    `json:"subject"`
+	Email         string    `json:"email,omitempty"`
+	EmailVerified bool      `json:"email_verified"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Workspace struct {
@@ -31,6 +32,36 @@ type Membership struct {
 	UserID      string    `json:"user_id"`
 	Role        Role      `json:"role"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type WorkspaceInvitation struct {
+	ID            string     `json:"id"`
+	WorkspaceID   string     `json:"workspace_id"`
+	WorkspaceName string     `json:"workspace_name,omitempty"`
+	WorkspaceSlug string     `json:"workspace_slug,omitempty"`
+	Email         string     `json:"email"`
+	Role          Role       `json:"role"`
+	CreatedBy     string     `json:"created_by"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ExpiresAt     time.Time  `json:"expires_at"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	RevokedBy     string     `json:"revoked_by,omitempty"`
+	AcceptedAt    *time.Time `json:"accepted_at,omitempty"`
+	AcceptedBy    string     `json:"accepted_by,omitempty"`
+	Status        string     `json:"status"`
+}
+
+func (i *WorkspaceInvitation) SetStatus(now time.Time) {
+	switch {
+	case i.AcceptedAt != nil:
+		i.Status = "accepted"
+	case i.RevokedAt != nil:
+		i.Status = "revoked"
+	case !i.ExpiresAt.After(now):
+		i.Status = "expired"
+	default:
+		i.Status = "pending"
+	}
 }
 
 func (r Role) Allows(required Role) bool {

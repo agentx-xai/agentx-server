@@ -37,7 +37,7 @@ func TestOIDCDiscoveryAndJWKSVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"iss": server.URL, "sub": "subject-1", "aud": "audience", "exp": time.Now().Add(time.Minute).Unix(), "email": "subject@example.com"})
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"iss": server.URL, "sub": "subject-1", "aud": "audience", "exp": time.Now().Add(time.Minute).Unix(), "email": "subject@example.com", "email_verified": true})
 	token.Header["kid"] = "test"
 	raw, err := token.SignedString(key)
 	if err != nil {
@@ -47,7 +47,43 @@ func TestOIDCDiscoveryAndJWKSVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.UserID != server.URL+"|subject-1" || p.Email != "subject@example.com" {
+	if p.UserID != server.URL+"|subject-1" || p.Email != "subject@example.com" || !p.EmailVerified {
 		t.Fatalf("unexpected principal: %+v", p)
+	}
+}
+
+func TestOIDCBackchannelPreservesPublicIssuer(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicIssuer := "https://login.example.test/dex"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/dex/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": publicIssuer, "jwks_uri": publicIssuer + "/keys"})
+		case "/internal/dex/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "backchannel", "use": "sig", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	verifier, err := NewOIDCVerifier(context.Background(), publicIssuer, "agentx", server.URL+"/internal/dex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"iss": publicIssuer, "sub": "subject-2", "aud": "agentx", "exp": time.Now().Add(time.Minute).Unix()})
+	token.Header["kid"] = "backchannel"
+	raw, err := token.SignedString(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := verifier.Verify(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.UserID != publicIssuer+"|subject-2" {
+		t.Fatalf("unexpected principal: %+v", principal)
 	}
 }

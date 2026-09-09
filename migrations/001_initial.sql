@@ -1,4 +1,5 @@
 -- AgentX hosted persistence schema. Apply with goose/atlas or psql in a transaction.
+-- +goose Up
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, issuer text NOT NULL, subject text NOT NULL, email text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (issuer, subject));
 CREATE TABLE IF NOT EXISTS workspaces (id uuid PRIMARY KEY, slug text NOT NULL UNIQUE, name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS audit_events (id uuid PRIMARY KEY DEFAULT gen_random_
 CREATE TABLE IF NOT EXISTS outbox (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), topic text NOT NULL, payload_json jsonb NOT NULL, attempts integer NOT NULL DEFAULT 0, available_at timestamptz NOT NULL DEFAULT now(), processed_at timestamptz, dead_lettered_at timestamptz, last_error text);
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz;
 ALTER TABLE outbox ADD COLUMN IF NOT EXISTS last_error text;
-CREATE TABLE IF NOT EXISTS idempotency_keys (workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, key text NOT NULL, response_json jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (workspace_id, key));
-ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_fingerprint text;
+CREATE TABLE IF NOT EXISTS idempotency_keys (workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, key text NOT NULL, resource_type text NOT NULL DEFAULT 'release', request_fingerprint text NOT NULL, response_json jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (workspace_id, key));
+ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_fingerprint text NOT NULL DEFAULT '';
+ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS resource_type text NOT NULL DEFAULT 'release';
 CREATE INDEX IF NOT EXISTS audit_events_workspace_created_idx ON audit_events(workspace_id, created_at DESC);
